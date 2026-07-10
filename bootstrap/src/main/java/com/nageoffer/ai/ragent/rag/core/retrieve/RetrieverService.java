@@ -97,5 +97,33 @@ public interface RetrieverService {
      * @return RetrievedChunk 列表（按相似度排序）
      */
     List<RetrievedChunk> retrieveByVector(float[] vector, RetrieveRequest retrieveParam);
+
+    /**
+     * 是否支持单次全局检索
+     * <p>
+     * - 返回 true 时，全局检索通道会调用 {@link #retrieveGlobal} 一次性跨库召回
+     * - 返回 false 时，通道退化为逐库并行 fan-out（如 Milvus 每库一个 collection）
+     *
+     * @return 是否支持单次全局检索
+     */
+    default boolean supportsGlobalRetrieval() {
+        return false;
+    }
+
+    /**
+     * 单次全局检索
+     * <p>
+     * 说明：
+     * - 在一批 collection 范围内做一次带总预算的全局 TopN 召回，而非逐库 TopK 再拼接
+     * - 仅当 {@link #supportsGlobalRetrieval()} 返回 true 时可用
+     *
+     * @param query           用户自然语言问题
+     * @param collectionNames 参与全局检索的 collection 列表
+     * @param candidateBudget 候选总预算（单次查询 LIMIT 上限）
+     * @return RetrievedChunk 列表（按相似度倒序）
+     */
+    default List<RetrievedChunk> retrieveGlobal(String query, List<String> collectionNames, int candidateBudget) {
+        throw new UnsupportedOperationException("该检索后端不支持单次全局检索");
+    }
 }
 

@@ -17,6 +17,7 @@ import {
   MessageSquare,
   KeyRound,
   Search,
+  ShieldCheck,
   Settings,
   Upload,
   Users,
@@ -128,6 +129,11 @@ const menuGroups: MenuGroup[] = [
         label: "链路追踪",
         icon: Workflow
       },
+      {
+        path: "/admin/change-logs",
+        label: "审计日志",
+        icon: ShieldCheck
+      },
     ]
   },
   {
@@ -159,6 +165,7 @@ const breadcrumbMap: Record<string, string> = {
   "intent-list": "意图列表",
   ingestion: "数据通道",
   traces: "链路追踪",
+  "change-logs": "审计日志",
   "sample-questions": "示例问题",
   mappings: "关键词映射",
   settings: "系统设置",
@@ -683,7 +690,7 @@ export function AdminLayout() {
               <Button
                 variant="outline"
                 className="hidden items-center gap-2 sm:inline-flex"
-                onClick={() => navigate("/chat")}
+                onClick={() => window.open("/chat", "_blank")}
               >
                 <MessageSquare className="h-4 w-4" />
                 返回聊天

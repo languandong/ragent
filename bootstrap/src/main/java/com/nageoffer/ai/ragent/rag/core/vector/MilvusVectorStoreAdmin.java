@@ -18,13 +18,14 @@
 package com.nageoffer.ai.ragent.rag.core.vector;
 
 import com.nageoffer.ai.ragent.rag.config.RAGDefaultProperties;
-import com.nageoffer.ai.ragent.framework.exception.kb.VectorCollectionAlreadyExistsException;
 import io.milvus.v2.client.MilvusClientV2;
 import io.milvus.v2.common.ConsistencyLevel;
 import io.milvus.v2.common.DataType;
 import io.milvus.v2.common.IndexParam;
 import io.milvus.v2.service.collection.request.CreateCollectionReq;
 import io.milvus.v2.service.collection.request.HasCollectionReq;
+import io.milvus.v2.service.vector.request.DeleteReq;
+import io.milvus.v2.service.vector.response.DeleteResp;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -45,12 +46,13 @@ public class MilvusVectorStoreAdmin implements VectorStoreAdmin {
 
     @Override
     public void ensureVectorSpace(VectorSpaceSpec spec) {
-        String logicalName = spec.getSpaceId().getLogicalName();
+        // 全 Milvus 共用一个物理 collection，幂等确保其存在；各知识库以 collection_name 标量字段区分
+        String sharedCollection = ragDefaultProperties.getCollectionName();
         boolean exists = Boolean.TRUE.equals(milvusClient.hasCollection(
-                HasCollectionReq.builder().collectionName(logicalName).build()
+                HasCollectionReq.builder().collectionName(sharedCollection).build()
         ));
         if (exists) {
-            throw new VectorCollectionAlreadyExistsException(logicalName);
+            return;
         }
 
         List<CreateCollectionReq.FieldSchema> fieldSchemaList = new ArrayList<>();
@@ -59,9 +61,18 @@ public class MilvusVectorStoreAdmin implements VectorStoreAdmin {
                 CreateCollectionReq.FieldSchema.builder()
                         .name("id")
                         .dataType(DataType.VarChar)
-                        .maxLength(36)
+                        // chunkId 为雪花主键（最长 19 位），与 PG t_knowledge_vector.id VARCHAR(20) 对齐
+                        .maxLength(20)
                         .isPrimaryKey(true)
                         .autoID(false)
+                        .build()
+        );
+
+        fieldSchemaList.add(
+                CreateCollectionReq.FieldSchema.builder()
+                        .name("collection_name")
+                        .dataType(DataType.VarChar)
+                        .maxLength(64)
                         .build()
         );
 
@@ -105,25 +116,44 @@ public class MilvusVectorStoreAdmin implements VectorStoreAdmin {
                 ))
                 .build();
 
+        // 共享 collection 下每次检索都是「collection_name 过滤 + ANN」，为标量字段建倒排索引，避免大数据量时的全量标量扫描
+        IndexParam collectionNameIndex = IndexParam.builder()
+                .fieldName("collection_name")
+                .indexType(IndexParam.IndexType.INVERTED)
+                .indexName("collection_name")
+                .build();
+
         CreateCollectionReq createReq = CreateCollectionReq.builder()
-                .collectionName(logicalName)
+                .collectionName(sharedCollection)
                 .collectionSchema(collectionSchema)
                 .primaryFieldName("id")
                 .vectorFieldName("embedding")
                 .metricType(ragDefaultProperties.getMetricType())
                 .consistencyLevel(ConsistencyLevel.BOUNDED)
-                .indexParams(List.of(hnswIndex))
-                .description(spec.getRemark())
+                .indexParams(List.of(hnswIndex, collectionNameIndex))
+                .description("RAG 共享向量存储")
                 .build();
 
         milvusClient.createCollection(createReq);
+        log.info("已创建 Milvus 共享 collection: {}", sharedCollection);
     }
 
     @Override
     public boolean vectorSpaceExists(VectorSpaceId spaceId) {
-        String logicalName = spaceId.getLogicalName();
-        return milvusClient.hasCollection(
-                HasCollectionReq.builder().collectionName(logicalName).build()
-        );
+        // 共享 collection 模型下，存在性即共享 collection 是否已创建（忽略传入的逻辑名）
+        return Boolean.TRUE.equals(milvusClient.hasCollection(
+                HasCollectionReq.builder().collectionName(ragDefaultProperties.getCollectionName()).build()
+        ));
+    }
+
+    @Override
+    public void dropVectorSpace(String collectionName) {
+        // 共享 collection 模型：按 collection_name 标量字段删除该知识库的行，而非 drop 整个 collection
+        String filter = "collection_name == \"" + collectionName + "\"";
+        DeleteResp resp = milvusClient.delete(DeleteReq.builder()
+                .collectionName(ragDefaultProperties.getCollectionName())
+                .filter(filter)
+                .build());
+        log.info("已删除 collection_name={} 的向量行，deleteCnt={}", collectionName, resp.getDeleteCnt());
     }
 }

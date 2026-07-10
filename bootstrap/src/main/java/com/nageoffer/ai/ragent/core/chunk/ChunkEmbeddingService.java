@@ -49,12 +49,22 @@ public class ChunkEmbeddingService {
             return;
         }
         List<String> texts = chunks.stream()
-                .map(c -> c.getContent() == null ? "" : c.getContent())
+                .map(ChunkEmbeddingService::embedTextOf)
                 .toList();
         List<List<Float>> vectors = StringUtils.hasText(embeddingModel)
                 ? embeddingService.embedBatch(texts, embeddingModel)
                 : embeddingService.embedBatch(texts);
         applyEmbeddings(chunks, vectors);
+    }
+
+    /**
+     * 取嵌入文本：优先 embeddingText（表格 key-value 表示），为空白则回退 content
+     */
+    private static String embedTextOf(VectorChunk c) {
+        if (StringUtils.hasText(c.getEmbeddingText())) {
+            return c.getEmbeddingText();
+        }
+        return c.getContent() == null ? "" : c.getContent();
     }
 
     private void applyEmbeddings(List<VectorChunk> chunks, List<List<Float>> vectors) {

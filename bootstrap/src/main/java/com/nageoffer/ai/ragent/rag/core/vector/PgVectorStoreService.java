@@ -46,12 +46,13 @@ public class PgVectorStoreService implements VectorStoreService {
 
         // noinspection SqlDialectInspection,SqlNoDataSourceInspection
         jdbcTemplate.batchUpdate(
-                "INSERT INTO t_knowledge_vector (id, content, metadata, embedding) VALUES (?, ?, ?::jsonb, ?::vector)",
+                "INSERT INTO t_knowledge_vector (id, collection_name, content, metadata, embedding) VALUES (?, ?, ?, ?::jsonb, ?::vector)",
                 chunks, chunks.size(), (ps, chunk) -> {
                     ps.setString(1, chunk.getChunkId());
-                    ps.setString(2, chunk.getContent());
-                    ps.setString(3, buildMetadataJson(collectionName, docId, chunk));
-                    ps.setString(4, toVectorLiteral(chunk.getEmbedding()));
+                    ps.setString(2, collectionName);
+                    ps.setString(3, chunk.getContent());
+                    ps.setString(4, buildMetadataJson(docId, chunk));
+                    ps.setString(5, toVectorLiteral(chunk.getEmbedding()));
                 });
 
         log.info("批量写入向量到 PostgreSQL，collectionName={}, docId={}, count={}", collectionName, docId, chunks.size());
@@ -61,7 +62,7 @@ public class PgVectorStoreService implements VectorStoreService {
     public void deleteDocumentVectors(String collectionName, String docId) {
         // noinspection SqlDialectInspection,SqlNoDataSourceInspection
         int deleted = jdbcTemplate.update(
-                "DELETE FROM t_knowledge_vector WHERE metadata->>'collection_name' = ? AND metadata->>'doc_id' = ?",
+                "DELETE FROM t_knowledge_vector WHERE collection_name = ? AND metadata->>'doc_id' = ?",
                 collectionName, docId);
         log.info("删除文档向量，collectionName={}, docId={}, deleted={}", collectionName, docId, deleted);
     }
@@ -87,22 +88,22 @@ public class PgVectorStoreService implements VectorStoreService {
     public void updateChunk(String collectionName, String docId, VectorChunk chunk) {
         // noinspection SqlDialectInspection,SqlNoDataSourceInspection
         jdbcTemplate.update(
-                "INSERT INTO t_knowledge_vector (id, content, metadata, embedding) VALUES (?, ?, ?::jsonb, ?::vector) " +
-                        "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, metadata = EXCLUDED.metadata, embedding = EXCLUDED.embedding",
+                "INSERT INTO t_knowledge_vector (id, collection_name, content, metadata, embedding) VALUES (?, ?, ?, ?::jsonb, ?::vector) " +
+                        "ON CONFLICT (id) DO UPDATE SET collection_name = EXCLUDED.collection_name, content = EXCLUDED.content, metadata = EXCLUDED.metadata, embedding = EXCLUDED.embedding",
                 chunk.getChunkId(),
+                collectionName,
                 chunk.getContent(),
-                buildMetadataJson(collectionName, docId, chunk),
+                buildMetadataJson(docId, chunk),
                 toVectorLiteral(chunk.getEmbedding())
         );
     }
 
-    private String buildMetadataJson(String collectionName, String docId, VectorChunk chunk) {
+    private String buildMetadataJson(String docId, VectorChunk chunk) {
         Map<String, Object> meta = new LinkedHashMap<>();
         if (chunk.getMetadata() != null) {
             meta.putAll(chunk.getMetadata());
         }
 
-        meta.put("collection_name", collectionName);
         meta.put("doc_id", docId);
         meta.put("chunk_index", chunk.getIndex());
         try {

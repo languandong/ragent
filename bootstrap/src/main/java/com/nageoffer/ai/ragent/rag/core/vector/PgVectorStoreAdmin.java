@@ -61,4 +61,13 @@ public class PgVectorStoreAdmin implements VectorStoreAdmin {
             return false;
         }
     }
+
+    @Override
+    public void dropVectorSpace(String collectionName) {
+        // PG 为共享表：仅删除该 collection 的残留向量行，不动共享 HNSW 索引
+        // 常规情况下文档删除已逐一清理，此处多为 0 行的兜底
+        // noinspection SqlDialectInspection,SqlNoDataSourceInspection
+        int deleted = jdbcTemplate.update("DELETE FROM t_knowledge_vector WHERE collection_name = ?", collectionName);
+        log.info("已删除 collection={} 的残留向量行，count={}", collectionName, deleted);
+    }
 }

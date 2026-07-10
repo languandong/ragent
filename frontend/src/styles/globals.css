@@ -416,8 +416,12 @@ html.dark *::-webkit-scrollbar-thumb:hover {
     @apply px-5 pb-4 pt-6;
   }
 
+  .admin-layout .admin-sidebar--collapsed .admin-sidebar__brand {
+    @apply px-3;
+  }
+
   .admin-layout .admin-sidebar__logo {
-    @apply flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#4F46E5] to-[#7C3AED] text-sm font-semibold text-white;
+    @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#4F46E5] to-[#7C3AED] text-sm font-semibold text-white;
   }
 
   .admin-layout .admin-sidebar__title {

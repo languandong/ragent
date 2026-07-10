@@ -39,6 +39,7 @@ public final class FileTypeDetector {
             Map.entry("application/x-pdf", "pdf"),
             Map.entry("text/markdown", "markdown"),
             Map.entry("text/x-markdown", "markdown"),
+            Map.entry("text/x-web-markdown", "markdown"),
             Map.entry("application/msword", "doc"),
             Map.entry("application/vnd.ms-word", "doc"),
             Map.entry("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx")

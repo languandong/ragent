@@ -67,10 +67,11 @@ public class MilvusVectorStoreService implements VectorStoreService {
                 content = content.substring(0, 65535);
             }
 
-            JsonObject metadata = buildMetadata(collectionName, docId, chunk);
+            JsonObject metadata = buildMetadata(docId, chunk);
 
             JsonObject row = new JsonObject();
             row.addProperty("id", chunk.getChunkId());
+            row.addProperty("collection_name", collectionName);
             row.addProperty("content", content);
             row.add("metadata", metadata);
             row.add("embedding", toJsonArray(vectors.get(i)));
@@ -79,7 +80,7 @@ public class MilvusVectorStoreService implements VectorStoreService {
         }
 
         InsertReq req = InsertReq.builder()
-                .collectionName(collectionName)
+                .collectionName(sharedCollection())
                 .data(rows)
                 .build();
 
@@ -101,16 +102,17 @@ public class MilvusVectorStoreService implements VectorStoreService {
             content = content.substring(0, 65535);
         }
 
-        JsonObject metadata = buildMetadata(collectionName, docId, chunk);
+        JsonObject metadata = buildMetadata(docId, chunk);
 
         JsonObject row = new JsonObject();
         row.addProperty("id", chunkPk);
+        row.addProperty("collection_name", collectionName);
         row.addProperty("content", content);
         row.add("metadata", metadata);
         row.add("embedding", toJsonArray(vector));
 
         UpsertReq upsertReq = UpsertReq.builder()
-                .collectionName(collectionName)
+                .collectionName(sharedCollection())
                 .data(List.of(row))
                 .build();
 
@@ -121,11 +123,11 @@ public class MilvusVectorStoreService implements VectorStoreService {
 
     @Override
     public void deleteDocumentVectors(String collectionName, String docId) {
-        // 已通过 collectionName 定位集合，只需按 doc_id 过滤即可
-        String filter = "metadata[\"doc_id\"] == \"" + docId + "\"";
+        // 共享 collection 下多库共存，doc_id 不再天然隔离，必须叠加 collection_name 限定
+        String filter = "collection_name == \"" + collectionName + "\" && metadata[\"doc_id\"] == \"" + docId + "\"";
 
         DeleteReq deleteReq = DeleteReq.builder()
-                .collectionName(collectionName)
+                .collectionName(sharedCollection())
                 .filter(filter)
                 .build();
 
@@ -136,11 +138,11 @@ public class MilvusVectorStoreService implements VectorStoreService {
 
     @Override
     public void deleteChunkById(String collectionName, String chunkId) {
-        // chunkId 就是 Milvus 中的 doc_id（主键），直接通过主键删除
+        // id 为雪花主键，全局唯一，直接按主键删除
         String filter = "id == \"" + chunkId + "\"";
 
         DeleteReq deleteReq = DeleteReq.builder()
-                .collectionName(collectionName)
+                .collectionName(sharedCollection())
                 .filter(filter)
                 .build();
 
@@ -160,7 +162,7 @@ public class MilvusVectorStoreService implements VectorStoreService {
         String filter = "id in [" + idList + "]";
 
         DeleteReq deleteReq = DeleteReq.builder()
-                .collectionName(collectionName)
+                .collectionName(sharedCollection())
                 .filter(filter)
                 .build();
 
@@ -196,15 +198,22 @@ public class MilvusVectorStoreService implements VectorStoreService {
         return arr;
     }
 
-    private JsonObject buildMetadata(String collectionName, String docId, VectorChunk chunk) {
+    private JsonObject buildMetadata(String docId, VectorChunk chunk) {
         JsonObject metadata = new JsonObject();
         if (chunk.getMetadata() != null) {
             chunk.getMetadata().forEach((k, v) -> metadata.add(k, GSON.toJsonTree(v)));
         }
 
-        metadata.addProperty("collection_name", collectionName);
+        // collection_name 已提升为顶层标量字段，不再冗余写入 metadata
         metadata.addProperty("doc_id", docId);
         metadata.addProperty("chunk_index", chunk.getIndex());
         return metadata;
+    }
+
+    /**
+     * 全 Milvus 共用的物理 collection（所有知识库的 chunk 都写在这里，按 collection_name 标量字段区分）
+     */
+    private String sharedCollection() {
+        return ragDefaultProperties.getCollectionName();
     }
 }

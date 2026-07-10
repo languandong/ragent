@@ -32,6 +32,8 @@ public class StoredFileDTO {
 
     private String detectedType;
 
+    private String mimeType;
+
     private Long size;
 
     private String originalFilename;

@@ -117,7 +117,7 @@ public class FixedSizeTextChunker implements ChunkingStrategy {
      * - 其次：中文句末标点（。！？）
      * - 再次：英文 .!?（仅当后面是空白/换行/结束 才算边界，避免切 URL 域名点号）
      * <p>
-     * 回退距离 <= overlap，避免 chunk 高度重复。
+     * 回退距离 <= overlap，避免 chunk 高度重复
      */
     private int adjustToBoundary(String text, int start, int targetEnd, int overlap) {
         if (targetEnd <= start) return targetEnd;
@@ -181,17 +181,21 @@ public class FixedSizeTextChunker implements ChunkingStrategy {
             if (inUrl) {
                 if (Character.isWhitespace(c)) {
                     int j = i;
-                    boolean sawNewline = false;
+                    int newlineCount = 0;
                     while (j < src.length() && Character.isWhitespace(src.charAt(j))) {
-                        if (src.charAt(j) == '\n') sawNewline = true;
+                        if (src.charAt(j) == '\n') newlineCount++;
                         j++;
                     }
+                    boolean sawNewline = newlineCount > 0;
+                    // 空行(≥2 换行)是段落分隔，URL 软换行只会是单个换行;跨空行绝不合并，
+                    // 否则会把 markdown 图片链接 ![](url) 与其后另起的标题/段落粘连(如 ![](url)## 标题)
+                    boolean blankLine = newlineCount >= 2;
 
                     char prev = (i > 0) ? src.charAt(i - 1) : 0;
                     char next = (j < src.length()) ? src.charAt(j) : 0;
 
                     // 只在“很像 URL 被拆开”的情况下合并空白
-                    if (sawNewline && next != 0 && shouldJoinBrokenUrl(prev, next, src, j)) {
+                    if (sawNewline && !blankLine && next != 0 && shouldJoinBrokenUrl(prev, next, src, j)) {
                         i = j - 1;
                         continue;
                     }
@@ -233,7 +237,7 @@ public class FixedSizeTextChunker implements ChunkingStrategy {
 
     /**
      * 判断：URL 内遇到换行/空白时，是否应该把空白删掉并继续拼接 URL
-     * 关键：避免把 “\n2.”（列表项）吞掉。
+     * 关键：避免把 “\n2.”（列表项）吞掉
      */
     private boolean shouldJoinBrokenUrl(char prev, char next, String s, int nextIndex) {
         // 如果下一行像 “2.” “10.” 这种列表项开头 -> 绝不合并

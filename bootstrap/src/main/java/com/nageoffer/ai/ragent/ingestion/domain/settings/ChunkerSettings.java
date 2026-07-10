@@ -55,4 +55,11 @@ public class ChunkerSettings {
      * 用于指定文本切分的边界字符
      */
     private String separator;
+
+    /**
+     * 表格每个 chunk 的最大数据行数（block-aware 链路 TableChunker 的硬上限）
+     * 实际块大小主要由 chunkSize 预算驱动，本值仅防止极窄表把过多行堆进一块
+     * 可空，为空时由 ChunkerNode 取默认值
+     */
+    private Integer rowsPerChunk;
 }

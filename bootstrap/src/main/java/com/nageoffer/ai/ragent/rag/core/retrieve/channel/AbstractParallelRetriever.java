@@ -91,11 +91,24 @@ public abstract class AbstractParallelRetriever<T> {
             }
         }
 
-        // 3. 打印统计日志
+        // 3. 跨目标按相关性得分归并排序
+        // 各目标并行返回的子列表仅在自身内部有序，addAll 拼接后跨目标名次等于拼接顺序，
+        // 叠加目标集合本身可能无序（如 HashSet），会让下游 RRF 的名次基准失真、截断误砍高分
+        // 故在通道出口统一按 score 降序，兑现「该通道视角下的全局相关性排序」这一不变式
+        allChunks.sort((a, b) -> Float.compare(scoreOf(b), scoreOf(a)));
+
+        // 4. 打印统计日志
         log.info("{} 检索统计 - 总目标数: {}, 成功: {}, 失败: {}, 检索到 Chunk 总数: {}",
                 getStatisticsName(), targets.size(), successCount, failureCount, allChunks.size());
 
         return allChunks;
+    }
+
+    /**
+     * 取 chunk 得分，缺失时视为最低分沉底
+     */
+    private static float scoreOf(RetrievedChunk chunk) {
+        return chunk.getScore() == null ? Float.NEGATIVE_INFINITY : chunk.getScore();
     }
 
     /**

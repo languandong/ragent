@@ -2,12 +2,14 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { LoginPage } from "@/pages/LoginPage";
 import { ChatPage } from "@/pages/ChatPage";
+import { ChangeLogsPage } from "@/pages/ChangeLogsPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { AdminLayout } from "@/pages/admin/AdminLayout";
 import { DashboardPage } from "@/pages/admin/dashboard/DashboardPage";
 import { KnowledgeListPage } from "@/pages/admin/knowledge/KnowledgeListPage";
 import { KnowledgeDocumentsPage } from "@/pages/admin/knowledge/KnowledgeDocumentsPage";
 import { KnowledgeChunksPage } from "@/pages/admin/knowledge/KnowledgeChunksPage";
+import { BizChangeLogPage } from "@/pages/admin/change-logs/BizChangeLogPage";
 import { IntentTreePage } from "@/pages/admin/intent-tree/IntentTreePage";
 import { IntentListPage } from "@/pages/admin/intent-tree/IntentListPage";
 import { IntentEditPage } from "@/pages/admin/intent-tree/IntentEditPage";
@@ -86,6 +88,14 @@ export const router = createBrowserRouter([
     )
   },
   {
+    path: "/change-logs",
+    element: (
+      <RequireAuth>
+        <ChangeLogsPage />
+      </RequireAuth>
+    )
+  },
+  {
     path: "/admin",
     element: (
       <RequireAdmin>
@@ -136,6 +146,10 @@ export const router = createBrowserRouter([
       {
         path: "traces/:traceId",
         element: <RagTraceDetailPage />
+      },
+      {
+        path: "change-logs",
+        element: <BizChangeLogPage />
       },
       {
         path: "settings",

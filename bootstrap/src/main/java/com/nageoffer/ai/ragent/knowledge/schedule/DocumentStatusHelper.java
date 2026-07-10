@@ -28,6 +28,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Date;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -39,10 +40,12 @@ public class DocumentStatusHelper {
     private final KnowledgeDocumentMapper documentMapper;
 
     public boolean tryMarkRunning(String docId) {
+        // Wrapper 更新不触发 updateTime 自动填充, 显式刷新, 使卡死恢复以分块开始时刻为基准
         return documentMapper.update(
                 Wrappers.lambdaUpdate(KnowledgeDocumentDO.class)
                         .set(KnowledgeDocumentDO::getStatus, DocumentStatus.RUNNING.getCode())
                         .set(KnowledgeDocumentDO::getUpdatedBy, SYSTEM_USER)
+                        .set(KnowledgeDocumentDO::getUpdateTime, new Date())
                         .eq(KnowledgeDocumentDO::getId, docId)
                         .eq(KnowledgeDocumentDO::getDeleted, 0)
                         .eq(KnowledgeDocumentDO::getEnabled, 1)
@@ -75,15 +78,38 @@ public class DocumentStatusHelper {
         }
     }
 
-    public int recoverStuckRunning(long timeoutMinutes) {
+    public StuckRecoveryResult recoverStuckRunning(long timeoutMinutes) {
         long safeTimeout = Math.max(timeoutMinutes, 10);
         Date threshold = new Date(System.currentTimeMillis() - safeTimeout * 60 * 1000);
-        return documentMapper.update(
+
+        List<String> stuckDocIds = documentMapper.selectList(
+                Wrappers.lambdaQuery(KnowledgeDocumentDO.class)
+                        .select(KnowledgeDocumentDO::getId)
+                        .eq(KnowledgeDocumentDO::getStatus, DocumentStatus.RUNNING.getCode())
+                        .eq(KnowledgeDocumentDO::getEnabled, 1)
+                        .lt(KnowledgeDocumentDO::getUpdateTime, threshold)
+        ).stream().map(KnowledgeDocumentDO::getId).toList();
+
+        if (stuckDocIds.isEmpty()) {
+            return new StuckRecoveryResult(List.of(), 0);
+        }
+
+        int updated = documentMapper.update(
                 Wrappers.lambdaUpdate(KnowledgeDocumentDO.class)
                         .set(KnowledgeDocumentDO::getStatus, DocumentStatus.FAILED.getCode())
                         .set(KnowledgeDocumentDO::getUpdatedBy, SYSTEM_USER)
+                        .in(KnowledgeDocumentDO::getId, stuckDocIds)
                         .eq(KnowledgeDocumentDO::getStatus, DocumentStatus.RUNNING.getCode())
-                        .lt(KnowledgeDocumentDO::getUpdateTime, threshold)
         );
+
+        if (updated != stuckDocIds.size()) {
+            log.warn("卡死文档恢复时部分候选状态已变化: 候选 {} 个, 实际重置 {} 个",
+                    stuckDocIds.size(), updated);
+        }
+
+        return new StuckRecoveryResult(stuckDocIds, updated);
+    }
+
+    public record StuckRecoveryResult(List<String> stuckDocIds, int actualRecovered) {
     }
 }

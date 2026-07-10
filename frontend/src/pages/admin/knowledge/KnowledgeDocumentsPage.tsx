@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { Check, FileUp, Image, PlayCircle, RefreshCw, Trash2, Pencil, FileBarChart, X, Eye, MoreHorizontal, FileText, Link as LinkIcon } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { Check, FileUp, FileImage, PlayCircle, RefreshCw, Trash2, Pencil, FileBarChart, X, Eye, MoreHorizontal, FileText, FileSpreadsheet, Link as LinkIcon, Download } from "lucide-react";
 import { toast } from "sonner";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -33,11 +33,18 @@ import {
   uploadDocument,
   getChunkStrategies,
   getChunkLogsPage,
-  previewDocument
+  previewDocument,
+  fetchDocumentFile
 } from "@/services/knowledgeService";
 import { getIngestionPipelines, type IngestionPipeline } from "@/services/ingestionService";
 import { getSystemSettings } from "@/services/settingsService";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
+import { csvToMarkdown } from "@/lib/csvToMarkdown";
+
+// xlsx 预览依赖较重(exceljs + x-data-spreadsheet)，懒加载避免拖累主包
+const SpreadsheetPreview = lazy(() =>
+  import("@/components/admin/SpreadsheetPreview").then(m => ({ default: m.SpreadsheetPreview }))
+);
 import { getErrorMessage } from "@/utils/error";
 
 const PAGE_SIZE = 10;
@@ -150,6 +157,15 @@ const formatChunkStrategy = (strategy?: string | null) => {
   return strategy || "-";
 };
 
+// 表格类文件：走 block-aware 按行切分 + key-val 嵌入，配置面板只暴露真正生效的参数
+const TABLE_FILE_EXTS = ["xlsx", "xls", "csv"];
+const extOf = (name?: string | null) => name?.split(".").pop()?.toLowerCase() ?? "";
+const isTableExt = (ext?: string | null) => !!ext && TABLE_FILE_EXTS.includes(ext.toLowerCase());
+// xlsx/xls 走 @js-preview/excel 在线预览(保留样式)，csv 转 markdown 复用 MarkdownRenderer
+const isSpreadsheetType = (ext?: string | null) => ext === "xlsx" || ext === "xls";
+// png/jpg/svg 图片直接用 <img> 拉源文件预览
+const isImageType = (ext?: string | null) => ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "svg";
+
 const FILE_TYPE_MAP: Record<string, { icon: typeof FileText; color: string }> = {
   pdf:         { icon: FileText, color: "text-red-500" },
   markdown:    { icon: FileText, color: "text-blue-500" },
@@ -157,14 +173,16 @@ const FILE_TYPE_MAP: Record<string, { icon: typeof FileText; color: string }> = 
   doc:         { icon: FileText, color: "text-blue-600" },
   docx:        { icon: FileText, color: "text-blue-600" },
   txt:         { icon: FileText, color: "text-slate-500" },
-  csv:         { icon: FileText, color: "text-emerald-500" },
-  image:       { icon: Image,   color: "text-emerald-500" },
-  png:         { icon: Image,   color: "text-emerald-500" },
-  jpg:         { icon: Image,   color: "text-emerald-500" },
-  jpeg:        { icon: Image,   color: "text-emerald-500" },
-  gif:         { icon: Image,   color: "text-emerald-500" },
-  webp:        { icon: Image,   color: "text-emerald-500" },
-  svg:         { icon: Image,   color: "text-emerald-500" },
+  xlsx:        { icon: FileSpreadsheet, color: "text-green-600" },
+  xls:         { icon: FileSpreadsheet, color: "text-green-600" },
+  csv:         { icon: FileSpreadsheet, color: "text-emerald-500" },
+  image:       { icon: FileImage, color: "text-emerald-500" },
+  png:         { icon: FileImage, color: "text-emerald-500" },
+  jpg:         { icon: FileImage, color: "text-emerald-500" },
+  jpeg:        { icon: FileImage, color: "text-emerald-500" },
+  gif:         { icon: FileImage, color: "text-emerald-500" },
+  webp:        { icon: FileImage, color: "text-emerald-500" },
+  svg:         { icon: FileImage, color: "text-emerald-500" },
 };
 
 const renderFileTypeIcon = (fileType?: string | null, sourceType?: string | null) => {
@@ -184,7 +202,16 @@ export function KnowledgeDocumentsPage() {
   const navigate = useNavigate();
   const [kb, setKb] = useState<KnowledgeBase | null>(null);
   const [pageData, setPageData] = useState<PageResult<KnowledgeDocument> | null>(null);
-  const [current, setCurrent] = useState(1);
+  // 页码塞进 history state（不进 URL，保持 RESTful 路径），离开分块页 navigate(-1) 返回时自动恢复
+  const location = useLocation();
+  const current = Math.max(1, Number((location.state as { page?: number } | null)?.page) || 1);
+  const setCurrent = (next: number | ((prev: number) => number)) => {
+    const value = typeof next === "function" ? next(current) : next;
+    navigate(location.pathname, {
+      replace: true,
+      state: { ...(location.state as object | null), page: value }
+    });
+  };
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [keyword, setKeyword] = useState("");
@@ -375,8 +402,7 @@ export function KnowledgeDocumentsPage() {
   };
 
   const handleRefresh = () => {
-    setCurrent(1);
-    loadDocuments(1, statusFilter, keyword);
+    loadDocuments(current, statusFilter, keyword);
   };
 
   const handleDelete = async () => {
@@ -432,15 +458,29 @@ export function KnowledgeDocumentsPage() {
         processMode: detailProcessMode,
       };
       if (detailProcessMode === "chunk") {
-        data.chunkStrategy = detailChunkStrategy;
-        // 根据策略的 defaultConfig keys 组装 chunkConfig JSON
-        const strategy = detailStrategies.find(s => s.value === detailChunkStrategy);
-        if (strategy) {
-          const configObj: Record<string, number> = {};
-          for (const key of Object.keys(strategy.defaultConfig)) {
-            configObj[key] = Number(detailConfigValues[key]) || strategy.defaultConfig[key];
+        if (isDetailTable) {
+          // fixed_size 载体 + 表格 block-aware 自由键（rowsPerChunk / excelParser）
+          data.chunkStrategy = "fixed_size";
+          const configObj: Record<string, number | string> = {
+            chunkSize: Number(detailConfigValues["chunkSize"]) || 512,
+            overlapSize: 0,
+            rowsPerChunk: Number(detailConfigValues["rowsPerChunk"]) || 50
+          };
+          if (!isDetailCsv) {
+            configObj.excelParser = detailConfigValues["excelParser"] || "poi";
           }
           data.chunkConfig = JSON.stringify(configObj);
+        } else {
+          data.chunkStrategy = detailChunkStrategy;
+          // 根据策略的 defaultConfig keys 组装 chunkConfig JSON
+          const strategy = detailStrategies.find(s => s.value === detailChunkStrategy);
+          if (strategy) {
+            const configObj: Record<string, number> = {};
+            for (const key of Object.keys(strategy.defaultConfig)) {
+              configObj[key] = Number(detailConfigValues[key]) || strategy.defaultConfig[key];
+            }
+            data.chunkConfig = JSON.stringify(configObj);
+          }
         }
       } else {
         data.pipelineId = detailPipelineId;
@@ -487,20 +527,45 @@ export function KnowledgeDocumentsPage() {
 
   const handlePreview = async (doc: KnowledgeDocument) => {
     setPreviewTarget(doc);
-    if (doc.fileType === "pdf") {
-      setPreviewContent("");
+    setPreviewContent("");
+    // pdf 走 iframe、xlsx/xls 走 SpreadsheetPreview、png/jpg 走 <img>，均自行拉取源文件，无需预取内容
+    if (doc.fileType === "pdf" || isSpreadsheetType(doc.fileType) || isImageType(doc.fileType)) {
       return;
     }
-    setPreviewContent("");
     setPreviewLoading(true);
     try {
-      const content = await previewDocument(String(doc.id));
-      setPreviewContent(content);
+      if (doc.fileType === "csv") {
+        const buffer = await fetchDocumentFile(String(doc.id));
+        setPreviewContent(csvToMarkdown(new TextDecoder("utf-8").decode(buffer)));
+      } else {
+        const content = await previewDocument(String(doc.id));
+        setPreviewContent(content);
+      }
     } catch (error) {
       toast.error(getErrorMessage(error, "加载预览失败"));
       setPreviewTarget(null);
     } finally {
       setPreviewLoading(false);
+    }
+  };
+
+  const handleDownload = async (doc: KnowledgeDocument) => {
+    try {
+      const buffer = await fetchDocumentFile(String(doc.id));
+      const blob = new Blob([buffer]);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      // docName 通常已含扩展名，仅在完全没有后缀时才按 fileType 补全
+      const name = doc.docName || `document-${doc.id}`;
+      const hasExt = /\.[^./\\]+$/.test(name);
+      anchor.download = !hasExt && doc.fileType ? `${name}.${doc.fileType.toLowerCase()}` : name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "下载失败"));
     }
   };
 
@@ -520,6 +585,10 @@ export function KnowledgeDocumentsPage() {
   const detailSourceType = detailTarget?.sourceType?.toLowerCase();
   const detailIsUrlSource = detailSourceType === "url";
   const detailNameLabel = detailIsUrlSource ? "文档名称" : "本地文件";
+  // 表格类文档（用后端返回的 fileType 判定）：配置区切到表格专属项
+  const detailFileType = detailTarget?.fileType?.toLowerCase();
+  const isDetailTable = isTableExt(detailFileType);
+  const isDetailCsv = detailFileType === "csv";
 
   // 当策略切换时，用默认值填充配置
   const handleDetailStrategyChange = (value: string) => {
@@ -737,7 +806,7 @@ export function KnowledgeDocumentsPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        {(doc.fileType === "markdown" || doc.fileType === "pdf") ? (
+                        {(doc.fileType === "markdown" || doc.fileType === "pdf" || isTableExt(doc.fileType) || isImageType(doc.fileType)) ? (
                           <Button
                             size="sm"
                             variant="outline"
@@ -777,6 +846,10 @@ export function KnowledgeDocumentsPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleDownload(doc)}>
+                              <Download className="mr-2 h-4 w-4" />
+                              下载文件
+                            </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handleOpenChunkLogs(doc)}>
                               <FileBarChart className="mr-2 h-4 w-4" />
                               分块详情
@@ -999,6 +1072,41 @@ export function KnowledgeDocumentsPage() {
 
               {detailProcessMode === "chunk" ? (
                 <div className="space-y-3 rounded-lg border p-3">
+                  {isDetailTable ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      表格按行切分，每块自动重复表头并以「列名: 值」嵌入；按下方预算控制每块大小
+                    </p>
+                    {!isDetailCsv ? (
+                      <div>
+                        <div className="text-sm font-medium mb-2">Excel 解析方式</div>
+                        <Select value={detailConfigValues["excelParser"] ?? "poi"}
+                          onValueChange={val => setDetailConfigValues(v => ({ ...v, excelParser: val }))}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="poi">简单 KeyVal（规整单表，快）</SelectItem>
+                            <SelectItem value="mineru">复杂版面（MinerU，合并/多表/多行表头，较慢）</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : null}
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="text-sm font-medium mb-2">块大小预算</div>
+                        <Input type="number" value={detailConfigValues["chunkSize"] ?? "512"}
+                          onChange={e => setDetailConfigValues(v => ({ ...v, chunkSize: e.target.value }))} />
+                        <div className="text-sm text-muted-foreground mt-1">每块嵌入文本的字符预算上限</div>
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium mb-2">每块最大行数</div>
+                        <Input type="number" value={detailConfigValues["rowsPerChunk"] ?? "50"}
+                          onChange={e => setDetailConfigValues(v => ({ ...v, rowsPerChunk: e.target.value }))} />
+                        <div className="text-sm text-muted-foreground mt-1">行数硬上限，与预算共同决定切分粒度</div>
+                      </div>
+                    </div>
+                  </div>
+                  ) : (
+                  <>
                   <div>
                     <div className="text-sm font-medium mb-2">分块策略</div>
                     <Select value={detailChunkStrategy} onValueChange={handleDetailStrategyChange}>
@@ -1072,6 +1180,8 @@ export function KnowledgeDocumentsPage() {
                       </div>
                     </div>
                   )}
+                  </>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -1092,7 +1202,7 @@ export function KnowledgeDocumentsPage() {
 
       <Dialog open={Boolean(previewTarget)} onOpenChange={(open) => (!open ? setPreviewTarget(null) : null)}>
         <DialogContent hideClose className={
-          previewTarget?.fileType === "pdf"
+          previewTarget?.fileType === "pdf" || isSpreadsheetType(previewTarget?.fileType) || isImageType(previewTarget?.fileType)
             ? "flex h-[92vh] flex-col overflow-hidden sm:max-w-[1100px] p-0"
             : "flex max-h-[90vh] flex-col overflow-hidden sm:max-w-[900px] p-0"
         } onOpenAutoFocus={(e) => e.preventDefault()} onCloseAutoFocus={(e) => { e.preventDefault(); requestAnimationFrame(() => (document.activeElement as HTMLElement)?.blur()); }}>
@@ -1110,6 +1220,18 @@ export function KnowledgeDocumentsPage() {
               src={`${import.meta.env.VITE_API_BASE_URL || ""}/knowledge-base/docs/${previewTarget.id}/file`}
               title={previewTarget.docName || ""}
             />
+          ) : isSpreadsheetType(previewTarget?.fileType) && previewTarget ? (
+            <Suspense fallback={<div className="py-8 text-center text-muted-foreground">加载中...</div>}>
+              <SpreadsheetPreview docId={String(previewTarget.id)} />
+            </Suspense>
+          ) : isImageType(previewTarget?.fileType) && previewTarget ? (
+            <div className="flex-1 overflow-auto flex items-center justify-center bg-muted/30 p-4">
+              <img
+                className="max-w-full max-h-full object-contain"
+                src={`${import.meta.env.VITE_API_BASE_URL || ""}/knowledge-base/docs/${previewTarget.id}/file`}
+                alt={previewTarget.docName || ""}
+              />
+            </div>
           ) : previewContent ? (
             (() => {
               const { head, body } = parseFrontMatter(previewContent);
@@ -1291,7 +1413,10 @@ const uploadSchema = z
     targetChars: z.string().optional(),
     maxChars: z.string().optional(),
     minChars: z.string().optional(),
-    overlapChars: z.string().optional()
+    overlapChars: z.string().optional(),
+    // 表格类专属：每块最大行数 + Excel 解析方式（poi / mineru）
+    rowsPerChunk: z.string().optional(),
+    excelParser: z.string().optional()
   })
   .superRefine((values, ctx) => {
     const isBlank = (value?: string) => !value || value.trim() === "";
@@ -1386,7 +1511,9 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
       targetChars: "1400",
       maxChars: "1800",
       minChars: "600",
-      overlapChars: "0"
+      overlapChars: "0",
+      rowsPerChunk: "50",
+      excelParser: "poi"
     }
   });
 
@@ -1399,6 +1526,10 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
   const isChunkMode = processMode === "chunk";
   const isPipelineMode = processMode === "pipeline";
   const isFixedSize = chunkStrategy === "fixed_size";
+  // 表格类（仅文件来源按扩展名判定）：配置面板切到表格专属项
+  const fileExt = isUrlSource ? "" : extOf(file?.name);
+  const isTableType = isTableExt(fileExt);
+  const isCsv = fileExt === "csv";
 
   const loadPipelines = async () => {
     setLoadingPipelines(true);
@@ -1429,7 +1560,9 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
         targetChars: "1400",
         maxChars: "1800",
         minChars: "600",
-        overlapChars: "0"
+        overlapChars: "0",
+        rowsPerChunk: "50",
+        excelParser: "poi"
       });
       setNoChunk(false);
       setOriginalChunkSize("512");
@@ -1477,6 +1610,13 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
     }
   }, [chunkSize, noChunk]);
 
+  // 表格类强制 fixed_size 载体：chunkStrategy 对表格无意义，固定成 fixed_size 让 chunkSize 作体量预算并通过后端校验
+  useEffect(() => {
+    if (isTableType && chunkStrategy !== "fixed_size") {
+      form.setValue("chunkStrategy", "fixed_size");
+    }
+  }, [isTableType, chunkStrategy, form]);
+
   // 处理"不分块"按钮点击
   const handleNoChunkToggle = () => {
     if (noChunk) {
@@ -1508,27 +1648,40 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
       return;
     }
 
-    // 根据当前策略的 defaultConfig keys 从表单值组装 chunkConfig JSON
+    // 组装 chunkConfig JSON：表格类只发真正生效的参数，其余按策略 defaultConfig keys 组装
     let chunkConfig: string | undefined;
     if (values.processMode === "chunk") {
-      const strategy = chunkStrategies.find((s) => s.value === values.chunkStrategy);
-      if (strategy) {
-        const formAccessors: Record<string, string | undefined> = {
-          chunkSize: values.chunkSize,
-          overlapSize: values.overlapSize,
-          targetChars: values.targetChars,
-          maxChars: values.maxChars,
-          minChars: values.minChars,
-          overlapChars: values.overlapChars
+      if (isTableType) {
+        // fixed_size 载体：chunkSize 作体量预算、overlapSize 占位过校验；rowsPerChunk / excelParser 为 block-aware 自由键
+        const config: Record<string, number | string> = {
+          chunkSize: parseNumber(values.chunkSize) ?? 512,
+          overlapSize: 0,
+          rowsPerChunk: parseNumber(values.rowsPerChunk) ?? 50
         };
-        const config: Record<string, number> = {};
-        for (const key of Object.keys(strategy.defaultConfig)) {
-          const val = parseNumber(formAccessors[key]);
-          if (val !== null) {
-            config[key] = val;
-          }
+        if (!isCsv) {
+          config.excelParser = values.excelParser || "poi";
         }
         chunkConfig = JSON.stringify(config);
+      } else {
+        const strategy = chunkStrategies.find((s) => s.value === values.chunkStrategy);
+        if (strategy) {
+          const formAccessors: Record<string, string | undefined> = {
+            chunkSize: values.chunkSize,
+            overlapSize: values.overlapSize,
+            targetChars: values.targetChars,
+            maxChars: values.maxChars,
+            minChars: values.minChars,
+            overlapChars: values.overlapChars
+          };
+          const config: Record<string, number> = {};
+          for (const key of Object.keys(strategy.defaultConfig)) {
+            const val = parseNumber(formAccessors[key]);
+            if (val !== null) {
+              config[key] = val;
+            }
+          }
+          chunkConfig = JSON.stringify(config);
+        }
       }
     }
 
@@ -1544,7 +1697,10 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
             ? values.scheduleCron.trim()
             : null,
         processMode: values.processMode,
-        chunkStrategy: values.processMode === "chunk" ? values.chunkStrategy : undefined,
+        chunkStrategy:
+          values.processMode === "chunk"
+            ? (isTableType ? "fixed_size" : values.chunkStrategy)
+            : undefined,
         chunkConfig: chunkConfig ?? null,
         pipelineId: values.processMode === "pipeline" ? values.pipelineId : null
       };
@@ -1637,6 +1793,7 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
                       ref={fileInputRef}
                       type="file"
                       className="hidden"
+                      accept=".pdf,.md,.markdown,.doc,.docx,.txt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.svg"
                       onChange={(e) => setFile(e.target.files?.[0] || null)}
                     />
                     {file ? (
@@ -1659,7 +1816,7 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
                       <>
                         <FileUp className="h-7 w-7 text-muted-foreground" />
                         <div className="text-sm font-medium">拖拽文件到此处，或点击选择</div>
-                        <div className="text-xs text-muted-foreground">支持 PDF、Markdown、Word、TXT 等格式</div>
+                        <div className="text-xs text-muted-foreground">支持 PDF、Markdown、Word、Excel、TXT、图片(PNG/JPG)等格式</div>
                       </>
                     )}
                   </div>
@@ -1765,6 +1922,67 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
 
               {isChunkMode ? (
                 <div className="space-y-3">
+                  {isTableType ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      表格按行切分，每块自动重复表头并以「列名: 值」嵌入；按下方预算控制每块大小
+                    </p>
+                    {!isCsv ? (
+                      <FormField
+                        control={form.control}
+                        name="excelParser"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground font-normal">Excel 解析方式</FormLabel>
+                            <Select value={field.value} onValueChange={field.onChange}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="选择解析方式" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="poi">简单 KeyVal（规整单表，快）</SelectItem>
+                                <SelectItem value="mineru">复杂版面（MinerU，合并/多表/多行表头，较慢）</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    ) : null}
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <FormField
+                        control={form.control}
+                        name="chunkSize"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground font-normal">块大小预算</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormDescription>每块嵌入文本的字符预算上限</FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="rowsPerChunk"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground font-normal">每块最大行数</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormDescription>行数硬上限，与预算共同决定切分粒度</FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  </div>
+                  ) : (
+                  <>
                   <FormField
                     control={form.control}
                     name="chunkStrategy"
@@ -1902,6 +2120,8 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
                   />
                 </div>
               )}
+                  </>
+                  )}
             </div>
             ) : null}
             </div>

@@ -49,42 +49,68 @@ public class MilvusRetrieverService implements RetrieverService {
 
     @Override
     public List<RetrievedChunk> retrieve(RetrieveRequest retrieveParam) {
-        List<Float> emb = embeddingService.embed(retrieveParam.getQuery());
-        float[] vec = toArray(emb);
-
-        float[] norm = normalize(vec);
-
+        float[] norm = normalize(toArray(embeddingService.embed(retrieveParam.getQuery())));
         return retrieveByVector(norm, retrieveParam);
     }
 
     @Override
     public List<RetrievedChunk> retrieveByVector(float[] vector, RetrieveRequest retrieveParam) {
+        // 单库/意图检索：在共享 collection 内按 collection_name 过滤；为空则检索全共享库
+        String filter = StrUtil.isBlank(retrieveParam.getCollectionName())
+                ? null
+                : "collection_name == \"" + retrieveParam.getCollectionName() + "\"";
+        return searchShared(vector, filter, retrieveParam.getTopK());
+    }
+
+    @Override
+    public boolean supportsGlobalRetrieval() {
+        return true;
+    }
+
+    @Override
+    public List<RetrievedChunk> retrieveGlobal(String query, List<String> collectionNames, int candidateBudget) {
+        if (collectionNames == null || collectionNames.isEmpty()) {
+            return List.of();
+        }
+        float[] norm = normalize(toArray(embeddingService.embed(query)));
+        // 全局检索：单次在共享 collection 内按 collection_name in [...] 跨库召回，替代逐库 fan-out
+        String inList = collectionNames.stream()
+                .map(c -> "\"" + c + "\"")
+                .collect(Collectors.joining(", "));
+        String filter = "collection_name in [" + inList + "]";
+        return searchShared(norm, filter, candidateBudget);
+    }
+
+    /**
+     * 在共享 collection 内执行一次向量检索
+     *
+     * @param filter 可选的标量过滤表达式（为空则不过滤，检索全共享库）
+     */
+    private List<RetrievedChunk> searchShared(float[] vector, String filter, int topK) {
         List<BaseVector> vectors = List.of(new FloatVec(vector));
 
         Map<String, Object> params = new HashMap<>();
         params.put("metric_type", ragDefaultProperties.getMetricType());
         params.put("ef", 128);
 
-        SearchReq req = SearchReq.builder()
-                .collectionName(
-                        StrUtil.isBlank(retrieveParam.getCollectionName()) ? ragDefaultProperties.getCollectionName() : retrieveParam.getCollectionName()
-                )
+        var builder = SearchReq.builder()
+                .collectionName(ragDefaultProperties.getCollectionName())
                 .annsField("embedding")
                 .data(vectors)
-                .topK(retrieveParam.getTopK())
+                .topK(topK)
                 .searchParams(params)
-                .outputFields(List.of("id", "content", "metadata"))
-                .build();
+                .outputFields(List.of("id", "content", "metadata"));
+        if (StrUtil.isNotBlank(filter)) {
+            builder.filter(filter);
+        }
 
-        SearchResp resp = milvusClient.search(req);
+        SearchResp resp = milvusClient.search(builder.build());
         List<List<SearchResp.SearchResult>> results = resp.getSearchResults();
 
         if (results == null || results.isEmpty()) {
             return List.of();
         }
 
-        // TODO 需确认后续是否对分数较低数据进行限制，限制多少合适？0.65？
-        // TODO 如果本次查询分数都较高，是否应该扩大查询范围？1.5倍？
         return results.get(0).stream()
                 .map(r -> new RetrievedChunk(
                         Objects.toString(r.getEntity().get("id"), ""),

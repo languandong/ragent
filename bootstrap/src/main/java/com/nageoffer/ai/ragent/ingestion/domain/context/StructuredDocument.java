@@ -17,6 +17,7 @@
 
 package com.nageoffer.ai.ragent.ingestion.domain.context;
 
+import com.nageoffer.ai.ragent.core.parser.model.Block;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -59,6 +60,15 @@ public class StructuredDocument {
      * 如作者、创建时间、页数等
      */
     private Map<String, Object> metadata;
+
+    /**
+     * 结构化 Block 列表（v1.1 多模态解析改造引入）
+     * <p>
+     * 由 DocumentParser.parseStructured() 输出，作为 ChunkerNode 的输入。
+     * 老字段 {@link #sections}/{@link #tables} 仍保留以维持向后兼容，
+     * 但新链路（M5/P1.7 之后）以 blocks 为准。
+     */
+    private List<Block> blocks;
 
     /**
      * 文档章节结构

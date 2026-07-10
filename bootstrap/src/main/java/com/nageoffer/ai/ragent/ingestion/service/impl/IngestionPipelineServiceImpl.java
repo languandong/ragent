@@ -24,6 +24,10 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mzt.logapi.starter.annotation.LogRecord;
+import com.nageoffer.ai.ragent.audit.constant.BizChangeBizType;
+import com.nageoffer.ai.ragent.audit.constant.BizChangeOperationType;
+import com.nageoffer.ai.ragent.audit.support.BizChangeLogContext;
 import com.nageoffer.ai.ragent.ingestion.controller.request.IngestionPipelineCreateRequest;
 import com.nageoffer.ai.ragent.ingestion.controller.request.IngestionPipelineNodeRequest;
 import com.nageoffer.ai.ragent.ingestion.controller.request.IngestionPipelineUpdateRequest;
@@ -57,9 +61,19 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
     private final IngestionPipelineMapper pipelineMapper;
     private final IngestionPipelineNodeMapper nodeMapper;
     private final ObjectMapper objectMapper;
+    private final BizChangeLogContext bizChangeLogContext;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @LogRecord(
+            success = "创建数据通道：{{#request.name}}",
+            fail = "创建数据通道失败：{{#_errorMsg}}",
+            type = BizChangeBizType.INGESTION_PIPELINE,
+            subType = BizChangeOperationType.CREATE,
+            bizNo = BizChangeLogContext.BIZ_ID_EXPRESSION,
+            extra = BizChangeLogContext.SNAPSHOT_EXPRESSION,
+            condition = BizChangeLogContext.RECORD_CONDITION
+    )
     public IngestionPipelineVO create(IngestionPipelineCreateRequest request) {
         Assert.notNull(request, () -> new ClientException("请求不能为空"));
         IngestionPipelineDO pipeline = IngestionPipelineDO.builder()
@@ -74,14 +88,26 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
             throw new ClientException("流水线名称已存在");
         }
         upsertNodes(pipeline.getId(), request.getNodes());
-        return toVO(pipeline, fetchNodes(pipeline.getId()));
+        IngestionPipelineVO result = toVO(pipeline, fetchNodes(pipeline.getId()));
+        bizChangeLogContext.put(String.valueOf(pipeline.getId()), null, result);
+        return result;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @LogRecord(
+            success = "更新数据通道：{{#pipelineId}}",
+            fail = "更新数据通道失败：{{#_errorMsg}}",
+            type = BizChangeBizType.INGESTION_PIPELINE,
+            subType = BizChangeOperationType.UPDATE,
+            bizNo = "{{#pipelineId}}",
+            extra = BizChangeLogContext.SNAPSHOT_EXPRESSION,
+            condition = BizChangeLogContext.RECORD_CONDITION
+    )
     public IngestionPipelineVO update(String pipelineId, IngestionPipelineUpdateRequest request) {
         IngestionPipelineDO pipeline = pipelineMapper.selectById(pipelineId);
         Assert.notNull(pipeline, () -> new ClientException("未找到流水线"));
+        IngestionPipelineVO before = toVO(BeanUtil.copyProperties(pipeline, IngestionPipelineDO.class), fetchNodes(pipeline.getId()));
 
         if (StringUtils.hasText(request.getName())) {
             pipeline.setName(request.getName());
@@ -95,7 +121,9 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
         if (request.getNodes() != null) {
             upsertNodes(pipeline.getId(), request.getNodes());
         }
-        return toVO(pipeline, fetchNodes(pipeline.getId()));
+        IngestionPipelineVO result = toVO(pipelineMapper.selectById(pipelineId), fetchNodes(pipeline.getId()));
+        bizChangeLogContext.put(pipelineId, before, result);
+        return result;
     }
 
     @Override
@@ -122,9 +150,19 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @LogRecord(
+            success = "删除数据通道：{{#pipelineId}}",
+            fail = "删除数据通道失败：{{#_errorMsg}}",
+            type = BizChangeBizType.INGESTION_PIPELINE,
+            subType = BizChangeOperationType.DELETE,
+            bizNo = "{{#pipelineId}}",
+            extra = BizChangeLogContext.SNAPSHOT_EXPRESSION,
+            condition = BizChangeLogContext.RECORD_CONDITION
+    )
     public void delete(String pipelineId) {
         IngestionPipelineDO pipeline = pipelineMapper.selectById(pipelineId);
         Assert.notNull(pipeline, () -> new ClientException("未找到流水线"));
+        IngestionPipelineVO before = toVO(BeanUtil.copyProperties(pipeline, IngestionPipelineDO.class), fetchNodes(pipeline.getId()));
         pipeline.setDeleted(1);
         pipeline.setUpdatedBy(UserContext.getUsername());
         pipelineMapper.deleteById(pipeline);
@@ -132,6 +170,7 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
         LambdaQueryWrapper<IngestionPipelineNodeDO> qw = new LambdaQueryWrapper<IngestionPipelineNodeDO>()
                 .eq(IngestionPipelineNodeDO::getPipelineId, pipeline.getId());
         nodeMapper.delete(qw);
+        bizChangeLogContext.put(pipelineId, before, null);
     }
 
     @Override

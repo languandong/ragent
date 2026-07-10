@@ -57,6 +57,11 @@ public class AIModelProperties {
     private ModelGroup rerank = new ModelGroup();
 
     /**
+     * 视觉大模型组配置（图生文，知识库入库期使用）
+     */
+    private ModelGroup vlm = new ModelGroup();
+
+    /**
      * 模型选择策略配置
      */
     private Selection selection = new Selection();

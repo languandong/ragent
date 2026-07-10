@@ -53,10 +53,11 @@ public class KnowledgeDocumentScheduleJob {
     @Scheduled(fixedDelay = 60_000, initialDelay = 30_000)
     public void recoverStuckRunningDocuments() {
         long timeoutMinutes = scheduleProperties.getRunningTimeoutMinutes();
-        int recovered = documentStatusHelper.recoverStuckRunning(timeoutMinutes);
-        if (recovered > 0) {
-            log.warn("恢复了 {} 个卡在 RUNNING 状态超过 {} 分钟的文档，已重置为 FAILED",
-                    recovered, Math.max(timeoutMinutes, 10));
+        DocumentStatusHelper.StuckRecoveryResult result = documentStatusHelper.recoverStuckRunning(timeoutMinutes);
+        if (result.actualRecovered() > 0) {
+            long effectiveTimeout = Math.max(timeoutMinutes, 10);
+            log.warn("重置了 {} 个卡在 RUNNING 状态超过 {} 分钟的文档为 FAILED，候选 docIds={}",
+                    result.actualRecovered(), effectiveTimeout, result.stuckDocIds());
         }
     }
 

@@ -45,19 +45,57 @@ public class PgRetrieverService implements RetrieverService {
 
     @Override
     public List<RetrievedChunk> retrieveByVector(float[] vector, RetrieveRequest request) {
-        // 设置ef_search提升召回率
+        // 单库检索：按 collection_name 列过滤，走 btree 索引
+        return queryByCollections(vector, List.of(request.getCollectionName()), request.getTopK());
+    }
+
+    @Override
+    public boolean supportsGlobalRetrieval() {
+        return true;
+    }
+
+    @Override
+    public List<RetrievedChunk> retrieveGlobal(String query, List<String> collectionNames, int candidateBudget) {
+        if (collectionNames == null || collectionNames.isEmpty()) {
+            return List.of();
+        }
+        List<Float> embedding = embeddingService.embed(query);
+        float[] vector = normalize(toArray(embedding));
+        // 全局检索：单条 SQL 在多库范围内做带总预算的 TopN 召回，替代逐库 fan-out
+        return queryByCollections(vector, collectionNames, candidateBudget);
+    }
+
+    /**
+     * 在指定 collection 范围内执行一次向量相似度检索
+     * <p>
+     * 单库与全局共用此方法：单库传单元素列表，全局传多元素列表
+     */
+    private List<RetrievedChunk> queryByCollections(float[] vector, List<String> collectionNames, int limit) {
+        // 提升召回率；迭代扫描保证过滤后仍能填满 LIMIT，消除过滤向量检索的召回悬崖（pgvector >= 0.8）
         // noinspection SqlDialectInspection,SqlNoDataSourceInspection
         jdbcTemplate.execute("SET hnsw.ef_search = 200");
+        // noinspection SqlDialectInspection,SqlNoDataSourceInspection
+        jdbcTemplate.execute("SET hnsw.iterative_scan = relaxed_order");
 
         String vectorLiteral = toVectorLiteral(vector);
+        String placeholders = collectionNames.stream().map(c -> "?").collect(java.util.stream.Collectors.joining(", "));
+
+        Object[] args = new Object[collectionNames.size() + 3];
+        args[0] = vectorLiteral;
+        for (int i = 0; i < collectionNames.size(); i++) {
+            args[i + 1] = collectionNames.get(i);
+        }
+        args[collectionNames.size() + 1] = vectorLiteral;
+        args[collectionNames.size() + 2] = limit;
+
         // noinspection SqlDialectInspection,SqlNoDataSourceInspection
-        return jdbcTemplate.query("SELECT id, content, 1 - (embedding <=> ?::vector) AS score FROM t_knowledge_vector WHERE metadata->>'collection_name' = ? ORDER BY embedding <=> ?::vector LIMIT ?",
+        return jdbcTemplate.query("SELECT id, content, 1 - (embedding <=> ?::vector) AS score FROM t_knowledge_vector WHERE collection_name IN (" + placeholders + ") ORDER BY embedding <=> ?::vector LIMIT ?",
                 (rs, rowNum) -> RetrievedChunk.builder()
                         .id(rs.getString("id"))
                         .text(rs.getString("content"))
                         .score(rs.getFloat("score"))
                         .build(),
-                vectorLiteral, request.getCollectionName(), vectorLiteral, request.getTopK()
+                args
         );
     }
 

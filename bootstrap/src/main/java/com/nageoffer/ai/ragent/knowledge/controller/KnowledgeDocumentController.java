@@ -65,11 +65,18 @@ public class KnowledgeDocumentController {
     private final KnowledgeDocumentService documentService;
     private final FileStorageService fileStorageService;
 
-    private static final Map<String, String> CONTENT_TYPE_MAP = Map.of(
-            "pdf", "application/pdf",
-            "markdown", "text/markdown",
-            "md", "text/markdown",
-            "txt", "text/plain"
+    private static final Map<String, String> CONTENT_TYPE_MAP = Map.ofEntries(
+            Map.entry("pdf", "application/pdf"),
+            Map.entry("markdown", "text/markdown"),
+            Map.entry("md", "text/markdown"),
+            Map.entry("txt", "text/plain"),
+            Map.entry("csv", "text/csv;charset=utf-8"),
+            Map.entry("xls", "application/vnd.ms-excel"),
+            Map.entry("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            Map.entry("png", "image/png"),
+            Map.entry("jpg", "image/jpeg"),
+            Map.entry("jpeg", "image/jpeg"),
+            Map.entry("svg", "image/svg+xml")
     );
 
     /**

@@ -45,6 +45,14 @@ rag:
   vector:
     type: pg  # 可选 milvus / pg
 
+  keyword:
+    type: none  # 可选 none / es
+    es:
+      uris: http://127.0.0.1:9200
+      index: rag_keyword_store  # 全库共享索引，按 collection_name 字段区分知识库
+      analyzer: ik_max_word
+      search-analyzer: ik_smart
+
   default:
     collection-name: rag_default_store
     dimension: 1536
@@ -96,14 +104,35 @@ rag:
       vector-global:
         confidence-threshold: 0.6
         top-k-multiplier: 3
+        candidate-budget: 100
       intent-directed:
         enabled: true
         min-intent-score: 0.4
         top-k-multiplier: 2
+      keyword:
+        enabled: true
+        mode: both
+        top-k-multiplier: 2
+    fusion:
+      strategy: rrf
+      rrf-k: 60
+      rerank-candidate-limit: 50  # RRF 融合后送入 Rerank 的候选上限，<=0 不截断（经验值 40~100）
 
   trace:
     enabled: true
     max-error-length: 1000
+
+  # 图片解析（图生文）配置
+  # 产出一段自包含的知识文本：既说清"图是什么"，又完整保留所有文字与层级
+  image-parse:
+    description-prompt: |-
+      请把这张图片的内容转写成一段自包含的知识文本，用于知识库检索与问答，不要描述颜色、布局、字体等视觉样式。要求：
+      1. 开头用一两句话说明这张图是什么（主题、类型、用途），让人不看图也能明白讲的是什么。
+      2. 随后按图中的分组、层级、流程关系，完整转写所有文字内容（OCR），保留每个分组标题与其下属条目的归属关系，不要遗漏任何文字。
+      3. 若是图表、架构图或流程图，请补充说明各部分之间的关系（如包含、调用、先后顺序），而不只是罗列文字。
+      4. 保持术语准确完整，表述贴近用户可能的提问方式。
+      5. 最后另起一行，用一句话自然引出图片（例如"下方为该内容对应的原始图片："），以便在这段文字后紧接着展示图片。
+    max-output-tokens: 4096
 
 ai:
   providers:
@@ -196,10 +225,35 @@ ai:
         model: noop
         priority: 100
 
+  vlm:
+    default-model: qwen-vl-max
+    candidates:
+      - id: qwen-vl-max
+        provider: bailian
+        model: qwen-vl-max
+
 rustfs:
   url: http://localhost:9000
   access-key-id: rustfsadmin
   secret-access-key: rustfsadmin
+  # 多模态解析产物 bucket（PDF 抽出来的图片、未来 PNG 原图等）
+  # 与用户上传的原始文档 bucket 隔离
+  asset-bucket: ragent-assets
+
+# MinerU SaaS API 配置（PDF / Word / PPT 走 MinerU 解析）
+mineru:
+  api-url: https://mineru.net/api/v4
+  api-key: ${MINERU_API_KEY:}
+  poll-interval-seconds: 5
+  timeout-seconds: 300
+  enable-table: true
+  enable-formula: true
+  ocr: false
+  language: ch
+  concurrency-limit: 5
+  semaphore-name: rag:mineru:parse
+  max-wait-seconds: 30
+  lease-seconds: 900
 
 sa-token:
   token-name: Authorization

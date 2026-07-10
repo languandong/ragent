@@ -18,6 +18,7 @@
 package com.nageoffer.ai.ragent.ingestion.domain.context;
 
 import com.nageoffer.ai.ragent.core.chunk.VectorChunk;
+import com.nageoffer.ai.ragent.core.parser.model.AssetRef;
 import com.nageoffer.ai.ragent.ingestion.domain.enums.IngestionStatus;
 import com.nageoffer.ai.ragent.rag.core.vector.VectorSpaceId;
 import lombok.AllArgsConstructor;
@@ -25,6 +26,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -125,4 +127,13 @@ public class IngestionContext {
      */
     @Builder.Default
     private boolean skipIndexerWrite = false;
+
+    /**
+     * 文档级资产引用列表（v1.1 多模态解析改造引入）
+     * <p>
+     * 由 DocumentParser 在解析阶段产生（如 MinerU 解包图片上传 RustFS 后），
+     * ChunkerNode 把对应 AssetRef 回填到对应 VectorChunk.assets
+     */
+    @Builder.Default
+    private List<AssetRef> assets = new ArrayList<>();
 }

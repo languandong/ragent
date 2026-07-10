@@ -67,18 +67,17 @@ public class DocumentParserSelector {
     /**
      * 根据 MIME 类型自动选择合适的解析策略
      * <p>
-     * 遍历所有可用的解析器，返回第一个支持该 MIME 类型的解析器。
-     * 如果没有找到匹配的解析器，则返回默认的 Tika 解析器。
-     * </p>
+     * v1.1 多模态解析改造:遍历所有可用的解析器,返回第一个支持该 MIME 类型的解析器
+     * <b>不再静默兜底到 Tika</b>;无匹配时返回 null,由调用方(ParserNode)显式抛错
      *
-     * @param mimeType MIME 类型（如 "application/pdf", "text/markdown"）
-     * @return 支持该 MIME 类型的解析器，如果没有则返回默认的 Tika 解析器
+     * @param mimeType MIME 类型(如 "application/pdf", "text/markdown")
+     * @return 支持该 MIME 类型的解析器;无匹配时返回 null
      */
     public DocumentParser selectByMimeType(String mimeType) {
         return strategies.stream()
                 .filter(parser -> parser.supports(mimeType))
                 .findFirst()
-                .orElseGet(() -> select(ParserType.TIKA.getType()));
+                .orElse(null);
     }
 
     /**

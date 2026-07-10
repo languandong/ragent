@@ -20,10 +20,11 @@ package com.nageoffer.ai.ragent.ingestion.node;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nageoffer.ai.ragent.core.chunk.ChunkEmbeddingService;
+import com.nageoffer.ai.ragent.core.chunk.ChunkingMode;
 import com.nageoffer.ai.ragent.core.chunk.ChunkingOptions;
-import com.nageoffer.ai.ragent.core.chunk.ChunkingStrategyFactory;
+import com.nageoffer.ai.ragent.core.chunk.StructuredChunkingService;
 import com.nageoffer.ai.ragent.core.chunk.VectorChunk;
-import com.nageoffer.ai.ragent.core.chunk.ChunkingStrategy;
+import com.nageoffer.ai.ragent.core.parser.model.Block;
 import com.nageoffer.ai.ragent.framework.exception.ClientException;
 import com.nageoffer.ai.ragent.ingestion.domain.context.IngestionContext;
 import com.nageoffer.ai.ragent.ingestion.domain.enums.IngestionNodeType;
@@ -35,7 +36,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * 文本分块节点
@@ -46,8 +46,8 @@ import java.util.stream.Collectors;
 public class ChunkerNode implements IngestionNode {
 
     private final ObjectMapper objectMapper;
-    private final ChunkingStrategyFactory chunkingStrategyFactory;
     private final ChunkEmbeddingService chunkEmbeddingService;
+    private final StructuredChunkingService structuredChunkingService;
 
     @Override
     public String getNodeType() {
@@ -56,47 +56,40 @@ public class ChunkerNode implements IngestionNode {
 
     @Override
     public NodeResult execute(IngestionContext context, NodeConfig config) {
-        String text = StringUtils.hasText(context.getEnhancedText()) ? context.getEnhancedText() : context.getRawText();
-        if (!StringUtils.hasText(text)) {
-            return NodeResult.fail(new ClientException("可分块文本为空"));
-        }
         ChunkerSettings settings = parseSettings(config.getSettings());
-        ChunkingStrategy chunker = chunkingStrategyFactory.requireStrategy(settings.getStrategy());
-        if (chunker == null) {
-            return NodeResult.fail(new ClientException("未找到分块策略: " + settings.getStrategy()));
-        }
 
-        ChunkingOptions chunkConfig = convertToChunkConfig(settings);
-        List<VectorChunk> results = chunker.chunk(text, chunkConfig);
-        List<VectorChunk> chunks = convertToVectorChunks(results);
+        // blocks 非空走 block-aware，否则用纯文本走 legacy（判断收口在 StructuredChunkingService）
+        List<Block> blocks = context.getDocument() == null ? null : context.getDocument().getBlocks();
+        boolean hasBlocks = blocks != null && !blocks.isEmpty();
+        String text = StringUtils.hasText(context.getEnhancedText())
+                ? context.getEnhancedText()
+                : context.getRawText();
+        ChunkingOptions options = settings.getStrategy()
+                .createDefaultOptions(settings.getChunkSize(), settings.getOverlapSize());
+
+        List<VectorChunk> chunks = structuredChunkingService.chunk(
+                blocks, text, settings.getStrategy(), options, settings.getRowsPerChunk());
+
+        if (chunks.isEmpty()) {
+            return NodeResult.fail(new ClientException(hasBlocks ? "分块结果为空" : "可分块文本为空"));
+        }
 
         // 嵌入：为切分后的文本块生成向量
         chunkEmbeddingService.embed(chunks, null);
 
         context.setChunks(chunks);
-        return NodeResult.ok("已分块 " + chunks.size() + " 段");
-    }
-
-    private ChunkingOptions convertToChunkConfig(ChunkerSettings settings) {
-        return settings.getStrategy().createDefaultOptions(
-                settings.getChunkSize(), settings.getOverlapSize());
-    }
-
-    private List<VectorChunk> convertToVectorChunks(List<VectorChunk> results) {
-        return results.stream()
-                .map(result -> VectorChunk.builder()
-                        .chunkId(result.getChunkId())
-                        .index(result.getIndex())
-                        .content(result.getContent())
-                        .metadata(result.getMetadata())
-                        .embedding(result.getEmbedding())
-                        .build())
-                .collect(Collectors.toList());
+        return NodeResult.ok("已分块 " + chunks.size() + " 段, path=" + (hasBlocks ? "block-aware" : "legacy-text"));
     }
 
     private ChunkerSettings parseSettings(JsonNode node) {
         ChunkerSettings settings = objectMapper.convertValue(node, ChunkerSettings.class);
-        if (settings.getChunkSize() == null || settings.getChunkSize() <= 0) {
+        if (settings.getStrategy() == null) {
+            settings.setStrategy(ChunkingMode.STRUCTURE_AWARE);
+        }
+        // 放行 -1（不分块哨兵）；其余 null / 非正值回落默认 512
+        Integer chunkSize = settings.getChunkSize();
+        if (chunkSize == null
+                || (chunkSize <= 0 && chunkSize != StructuredChunkingService.WHOLE_DOCUMENT_SENTINEL)) {
             settings.setChunkSize(512);
         }
         if (settings.getOverlapSize() == null || settings.getOverlapSize() < 0) {

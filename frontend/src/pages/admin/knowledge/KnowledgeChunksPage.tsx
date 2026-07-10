@@ -189,7 +189,7 @@ export function KnowledgeChunksPage() {
           </p>
         </div>
         <div className="admin-page-actions">
-          <Button variant="outline" onClick={() => navigate(`/admin/knowledge/${kbId}`)}>
+          <Button variant="outline" onClick={() => navigate(-1)}>
             返回文档
           </Button>
           <Button className="admin-primary-gradient" onClick={() => setCreateOpen(true)}>

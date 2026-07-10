@@ -60,4 +60,48 @@ public interface FileStorageService {
     InputStream openStream(String url);
 
     void deleteByUrl(String url);
+
+    /**
+     * 判断 bucket 是否存在
+     *
+     * @param bucket bucket 名
+     * @return 存在返回 true,不存在返回 false
+     */
+    boolean bucketExists(String bucket);
+
+    /**
+     * 创建 bucket(幂等:已存在视为成功)
+     *
+     * @param bucket bucket 名
+     */
+    void createBucket(String bucket);
+
+    /**
+     * 删除 bucket(幂等:不存在视为成功)
+     * <p>
+     * 先清空桶内对象再删桶,用于知识库删除时回收其独占 bucket
+     *
+     * @param bucket bucket 名
+     */
+    void deleteBucket(String bucket);
+
+    /**
+     * 把内部存储定位符转为浏览器可直连的公开预览 URL
+     * <p>
+     * 形如 {@code s3://ragent-assets/xxx.jpg} → {@code http://{rustfs}/ragent-assets/xxx.jpg}
+     * 要求对应 bucket 已开启公共读(见 {@link #setBucketPublicReadOnly}),仅用于多模态资产等可公开预览的对象
+     *
+     * @param url 内部 {@code s3://bucket/key} 定位符
+     * @return 公开 HTTP URL
+     */
+    String getPublicUrl(String url);
+
+    /**
+     * 给 bucket 下发公共读(匿名 GetObject)策略,幂等
+     * <p>
+     * 用于多模态解析产物 bucket:PDF 抽出的图片需被浏览器匿名直连预览
+     *
+     * @param bucket bucket 名
+     */
+    void setBucketPublicReadOnly(String bucket);
 }

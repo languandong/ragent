@@ -15,16 +15,15 @@
  * limitations under the License.
  */
 
-package com.nageoffer.ai.ragent.framework.exception.kb;
+package com.nageoffer.ai.ragent.audit.service;
 
-import com.nageoffer.ai.ragent.framework.exception.ServiceException;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.nageoffer.ai.ragent.audit.controller.request.BizChangeLogPageRequest;
+import com.nageoffer.ai.ragent.audit.controller.vo.BizChangeLogVO;
 
-/**
- * 向量表重复创建异常
- */
-public class VectorCollectionAlreadyExistsException extends ServiceException {
+public interface BizChangeLogService {
 
-    public VectorCollectionAlreadyExistsException(String collectionName) {
-        super("向量集合已存在，禁止重复创建：" + collectionName);
-    }
+    IPage<BizChangeLogVO> page(BizChangeLogPageRequest requestParam);
+
+    BizChangeLogVO get(String id);
 }

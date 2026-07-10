@@ -24,6 +24,10 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mzt.logapi.starter.annotation.LogRecord;
+import com.nageoffer.ai.ragent.audit.constant.BizChangeBizType;
+import com.nageoffer.ai.ragent.audit.constant.BizChangeOperationType;
+import com.nageoffer.ai.ragent.audit.support.BizChangeLogContext;
 import com.nageoffer.ai.ragent.rag.controller.request.DocumentSourceRequest;
 import com.nageoffer.ai.ragent.ingestion.controller.request.IngestionTaskCreateRequest;
 import com.nageoffer.ai.ragent.ingestion.controller.vo.IngestionTaskNodeVO;
@@ -75,17 +79,38 @@ public class IngestionTaskServiceImpl implements IngestionTaskService {
     private final IngestionTaskMapper taskMapper;
     private final IngestionTaskNodeMapper taskNodeMapper;
     private final ObjectMapper objectMapper;
+    private final BizChangeLogContext bizChangeLogContext;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @LogRecord(
+            success = "执行采集任务：{{#_ret.taskId}}",
+            fail = "执行采集任务失败：{{#_errorMsg}}",
+            type = BizChangeBizType.INGESTION_TASK,
+            subType = BizChangeOperationType.RUN,
+            bizNo = BizChangeLogContext.BIZ_ID_EXPRESSION,
+            extra = BizChangeLogContext.SNAPSHOT_EXPRESSION,
+            condition = BizChangeLogContext.RECORD_CONDITION
+    )
     public IngestionResult execute(IngestionTaskCreateRequest request) {
         Assert.notNull(request, () -> new ClientException("请求不能为空"));
         DocumentSource source = toSource(request.getSource());
-        return executeInternal(request.getPipelineId(), source, null, null, request.getVectorSpaceId());
+        IngestionResult result = executeInternal(request.getPipelineId(), source, null, null, request.getVectorSpaceId());
+        putTaskSnapshot(result);
+        return result;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @LogRecord(
+            success = "上传并执行采集任务：{{#_ret.taskId}}",
+            fail = "上传并执行采集任务失败：{{#_errorMsg}}",
+            type = BizChangeBizType.INGESTION_TASK,
+            subType = BizChangeOperationType.RUN,
+            bizNo = BizChangeLogContext.BIZ_ID_EXPRESSION,
+            extra = BizChangeLogContext.SNAPSHOT_EXPRESSION,
+            condition = BizChangeLogContext.RECORD_CONDITION
+    )
     public IngestionResult upload(String pipelineId, MultipartFile file) {
         Assert.notNull(file, () -> new ClientException("文件不能为空"));
         try {
@@ -100,7 +125,9 @@ public class IngestionTaskServiceImpl implements IngestionTaskService {
                     .location(fileName)
                     .fileName(fileName)
                     .build();
-            return executeInternal(pipelineId, source, bytes, mimeType, null);
+            IngestionResult result = executeInternal(pipelineId, source, bytes, mimeType, null);
+            putTaskSnapshot(result);
+            return result;
         } catch (Exception e) {
             throw new ClientException("读取上传文件失败: " + e.getMessage());
         }
@@ -179,6 +206,14 @@ public class IngestionTaskServiceImpl implements IngestionTaskService {
                 .chunkCount(result.getChunks() == null ? 0 : result.getChunks().size())
                 .message(result.getError() == null ? "OK" : result.getError().getMessage())
                 .build();
+    }
+
+    private void putTaskSnapshot(IngestionResult result) {
+        if (result == null || !StringUtils.hasText(result.getTaskId())) {
+            bizChangeLogContext.skip();
+            return;
+        }
+        bizChangeLogContext.put(result.getTaskId(), null, taskMapper.selectById(result.getTaskId()));
     }
 
     private void updateTaskFromContext(IngestionTaskDO task, IngestionContext context) {
