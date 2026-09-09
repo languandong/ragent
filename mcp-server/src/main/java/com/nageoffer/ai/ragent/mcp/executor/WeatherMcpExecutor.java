@@ -17,10 +17,12 @@
 
 package com.nageoffer.ai.ragent.mcp.executor;
 
+import cn.hutool.core.map.MapUtil;
+import cn.hutool.core.util.StrUtil;
+import com.nageoffer.ai.ragent.mcp.config.McpToolAnnotations;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
-import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import lombok.extern.slf4j.Slf4j;
@@ -104,26 +106,27 @@ public class WeatherMcpExecutor {
                 .name(TOOL_ID)
                 .description("查询城市天气信息，支持查看当前实时天气和未来多天天气预报，包含温度、湿度、风力、天气状况等信息")
                 .inputSchema(inputSchema)
+                .annotations(McpToolAnnotations.READ_ONLY)
                 .build();
     }
 
     private CallToolResult handleCall(CallToolRequest request) {
         long startMs = System.currentTimeMillis();
         try {
-            Map<String, Object> args = request.arguments() != null ? request.arguments() : Map.of();
-            String city = stringArg(args, "city");
-            String queryType = stringArg(args, "queryType");
-            Integer days = intArg(args, "days");
+            Map<String, Object> args = McpToolResults.args(request);
+            String city = MapUtil.getStr(args, "city");
+            String queryType = MapUtil.getStr(args, "queryType");
+            Integer days = MapUtil.getInt(args, "days");
 
-            if (city == null || city.isBlank()) {
-                return errorResult("请提供城市名称");
+            if (StrUtil.isBlank(city)) {
+                return McpToolResults.error("请提供城市名称");
             }
-            if (queryType == null || queryType.isBlank()) queryType = "current";
+            if (StrUtil.isBlank(queryType)) queryType = "current";
             if (days == null || days <= 0) days = 3;
             if (days > 7) days = 7;
 
             if (!CITY_COORDINATES.containsKey(city)) {
-                return errorResult("暂不支持查询该城市，当前支持：" + String.join("、", CITY_COORDINATES.keySet()));
+                return McpToolResults.error("暂不支持查询该城市，当前支持：" + String.join("、", CITY_COORDINATES.keySet()));
             }
 
             String result = switch (queryType) {
@@ -133,11 +136,11 @@ public class WeatherMcpExecutor {
 
             log.info("MCP 工具调用完成, toolId={}, city={}, queryType={}, elapsed={}ms",
                     TOOL_ID, city, queryType, System.currentTimeMillis() - startMs);
-            return successResult(result);
+            return McpToolResults.success(result);
         } catch (Exception e) {
             log.error("MCP 工具调用失败, toolId={}, elapsed={}ms",
                     TOOL_ID, System.currentTimeMillis() - startMs, e);
-            return errorResult("查询失败: " + e.getMessage());
+            return McpToolResults.error("查询失败: " + e.getMessage());
         }
     }
 
@@ -256,31 +259,6 @@ public class WeatherMcpExecutor {
         data.windLevel = windLevel;
         data.airQuality = airQuality;
         return data;
-    }
-
-    private static String stringArg(Map<String, Object> args, String key) {
-        Object val = args.get(key);
-        return val != null ? val.toString() : null;
-    }
-
-    private static Integer intArg(Map<String, Object> args, String key) {
-        Object val = args.get(key);
-        if (val instanceof Number n) return n.intValue();
-        return null;
-    }
-
-    private static CallToolResult successResult(String text) {
-        return CallToolResult.builder()
-                .content(List.of(new TextContent(text)))
-                .isError(false)
-                .build();
-    }
-
-    private static CallToolResult errorResult(String message) {
-        return CallToolResult.builder()
-                .content(List.of(new TextContent(message)))
-                .isError(true)
-                .build();
     }
 
     private static class WeatherData {

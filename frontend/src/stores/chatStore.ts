@@ -1,14 +1,25 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 
-import type { CompletionPayload, FeedbackValue, Message, MessageDeltaPayload, Session } from "@/types";
+import type {
+  CompletionPayload,
+  FeedbackValue,
+  Message,
+  MessageDeltaPayload,
+  Session
+} from "@/types";
 import {
   listMessages,
   listSessions,
   deleteSession as deleteSessionRequest,
   renameSession as renameSessionRequest
 } from "@/services/sessionService";
-import { stopTask, submitFeedback } from "@/services/chatService";
+import {
+  stopTask,
+  submitFeedback,
+  cancelFeedback,
+  generateRecommendedQuestions
+} from "@/services/chatService";
 import { buildQuery } from "@/utils/helpers";
 import { createStreamResponse } from "@/hooks/useStreamResponse";
 import { storage } from "@/utils/storage";
@@ -28,6 +39,9 @@ interface ChatState {
   streamAbort: (() => void) | null;
   streamingMessageId: string | null;
   cancelRequested: boolean;
+  openedSourceMessageId: string | null;
+  // 展开推荐面板后需滚入视口的消息；每次请求都是新对象，供 MessageList 一次性响应
+  recommendReveal: { id: string } | null;
   fetchSessions: () => Promise<void>;
   createSession: () => Promise<string>;
   deleteSession: (sessionId: string) => Promise<void>;
@@ -40,6 +54,11 @@ interface ChatState {
   appendStreamContent: (delta: string) => void;
   appendThinkingContent: (delta: string) => void;
   submitFeedback: (messageId: string, feedback: FeedbackValue) => Promise<void>;
+  toggleSourcesPanel: (messageId: string) => void;
+  openSourcesPanel: (messageId: string) => void;
+  closeSourcesPanel: () => void;
+  loadRecommended: (messageId: string) => Promise<void>;
+  toggleRecommended: (messageId: string) => void;
 }
 
 function mapVoteToFeedback(vote?: number | null): FeedbackValue {
@@ -86,6 +105,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamAbort: null,
   streamingMessageId: null,
   cancelRequested: false,
+  openedSourceMessageId: null,
+  recommendReveal: null,
   fetchSessions: async () => {
     set({ isLoading: true });
     try {
@@ -115,7 +136,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isCreatingNew: true,
         isLoading: false,
         thinkingStartAt: null,
-        deepThinkingEnabled: false
+        deepThinkingEnabled: false,
+        openedSourceMessageId: null
       });
       return "";
     }
@@ -133,7 +155,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamTaskId: null,
       streamAbort: null,
       streamingMessageId: null,
-      cancelRequested: false
+      cancelRequested: false,
+      openedSourceMessageId: null
     });
     return "";
   },
@@ -143,7 +166,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((state) => ({
         sessions: state.sessions.filter((session) => session.id !== sessionId),
         messages: state.currentSessionId === sessionId ? [] : state.messages,
-        currentSessionId: state.currentSessionId === sessionId ? null : state.currentSessionId
+        currentSessionId: state.currentSessionId === sessionId ? null : state.currentSessionId,
+        openedSourceMessageId:
+          state.currentSessionId === sessionId ? null : state.openedSourceMessageId
       }));
       toast.success("删除成功");
     } catch (error) {
@@ -175,7 +200,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isLoading: true,
       currentSessionId: sessionId,
       isCreatingNew: false,
-      thinkingStartAt: null
+      thinkingStartAt: null,
+      openedSourceMessageId: null
     });
     try {
       const data = await listMessages(sessionId);
@@ -191,24 +217,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isDeepThinking: Boolean(item.thinkingContent),
         createdAt: item.createTime,
         feedback: mapVoteToFeedback(item.vote),
-        status: "done"
+        status: "done",
+        sources: item.sources || undefined,
+        recommended: item.recommendedQuestions ?? undefined,
+        recommendedState: Array.isArray(item.recommendedQuestions) ? "ready" : undefined,
+        messageStatus: item.messageStatus ?? "NORMAL"
       }));
       set({ messages: mapped });
     } catch (error) {
       toast.error((error as Error).message || "加载消息失败");
     } finally {
-      if (get().currentSessionId !== sessionId) {
-        set({ isLoading: false });
-        return;
+      if (get().currentSessionId === sessionId) {
+        set({
+          isLoading: false,
+          isStreaming: false,
+          streamTaskId: null,
+          streamAbort: null,
+          streamingMessageId: null,
+          cancelRequested: false
+        });
       }
-      set({
-        isLoading: false,
-        isStreaming: false,
-        streamTaskId: null,
-        streamAbort: null,
-        streamingMessageId: null,
-        cancelRequested: false
-      });
     }
   },
   updateSessionTitle: (sessionId, title) => {
@@ -249,7 +277,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
 
     set((state) => ({
-      messages: [...state.messages, userMessage, assistantMessage],
+      // 新问题发出即收起所有历史消息的推荐面板 保持焦点在最新一轮问答
+      messages: [
+        ...state.messages.map((message) =>
+          message.recommendedOpen ? { ...message, recommendedOpen: false } : message
+        ),
+        userMessage,
+        assistantMessage
+      ],
       isStreaming: true,
       streamingMessageId: assistantId,
       thinkingStartAt: null,
@@ -331,6 +366,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
                     id: String(payload.messageId),
                     status: "done",
                     isThinking: false,
+                    sources: payload.sources ?? message.sources,
+                    messageStatus: payload.messageStatus ?? "NORMAL",
                     thinkingDuration:
                       message.thinkingDuration ?? computeThinkingDuration(state.thinkingStartAt)
                   }
@@ -345,6 +382,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
                     ...message,
                     status: "done",
                     isThinking: false,
+                    sources: payload.sources ?? message.sources,
+                    messageStatus: payload.messageStatus ?? "NORMAL",
                     thinkingDuration:
                       message.thinkingDuration ?? computeThinkingDuration(state.thinkingStartAt)
                   }
@@ -371,6 +410,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               content: message.content + suffix,
               status: "cancelled",
               isThinking: false,
+              sources: payload?.sources ?? message.sources,
+              messageStatus: payload?.messageStatus ?? "INTERRUPTED",
               thinkingDuration:
                 message.thinkingDuration ?? computeThinkingDuration(state.thinkingStartAt)
             };
@@ -508,11 +549,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         message.id === messageId ? { ...message, feedback } : message
       )
     }));
-    if (vote === null) {
-      toast.success("取消成功");
-      return;
-    }
     try {
+      if (vote === null) {
+        await cancelFeedback(messageId);
+        toast.success("取消成功");
+        return;
+      }
       await submitFeedback(messageId, vote);
       toast.success(feedback === "like" ? "点赞成功" : "点踩成功");
     } catch (error) {
@@ -521,7 +563,86 @@ export const useChatStore = create<ChatState>((set, get) => ({
           message.id === messageId ? { ...message, feedback: prev } : message
         )
       }));
-      toast.error((error as Error).message || "反馈保存失败");
+      toast.error((error as Error).message || (vote === null ? "取消反馈失败" : "反馈保存失败"));
     }
+  },
+  toggleSourcesPanel: (messageId) => {
+    set((state) => ({
+      openedSourceMessageId: state.openedSourceMessageId === messageId ? null : messageId
+    }));
+  },
+  openSourcesPanel: (messageId) => set({ openedSourceMessageId: messageId }),
+  closeSourcesPanel: () => set({ openedSourceMessageId: null }),
+  loadRecommended: async (messageId) => {
+    const target = get().messages.find((message) => message.id === messageId);
+    // loading/ready 直接返回：避免同一消息重复请求
+    if (!target || target.recommendedState === "loading" || target.recommendedState === "ready") {
+      return;
+    }
+    // 纯手动触发：点击即展开并露出骨架反馈
+    set((state) => ({
+      messages: state.messages.map((message) =>
+        message.id === messageId
+          ? { ...message, recommendedState: "loading", recommendedOpen: true }
+          : message
+      ),
+      recommendReveal: { id: messageId }
+    }));
+    try {
+      const result = await generateRecommendedQuestions(messageId);
+      if (result.status === "FAILED") {
+        throw new Error("推荐问题生成失败");
+      }
+      const list = result.status === "SUCCESS" ? result.questions : [];
+      set((state) => ({
+        messages: state.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, recommended: list, recommendedState: "ready", recommendedOpen: true }
+            : message
+        ),
+        // 就绪后内容变高，再次请求滚入视口，确保问题不被输入框遮挡
+        recommendReveal: { id: messageId }
+      }));
+    } catch {
+      // 失败置 error 态，由面板内「重试」按钮兜底
+      set((state) => ({
+        messages: state.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, recommendedState: "error", recommendedOpen: true }
+            : message
+        ),
+        recommendReveal: { id: messageId }
+      }));
+    }
+  },
+  toggleRecommended: (messageId) => {
+    const target = get().messages.find((message) => message.id === messageId);
+    if (!target) return;
+    // 加载中：保持展开，就绪后原地显示（再次点击不折叠，避免打断）
+    if (target.recommendedState === "loading") {
+      set((state) => ({
+        messages: state.messages.map((message) =>
+          message.id === messageId ? { ...message, recommendedOpen: true } : message
+        ),
+        recommendReveal: { id: messageId }
+      }));
+      return;
+    }
+    // 已尝试过（成功或失败）：纯展开/收起切换 失败态的重试走面板内按钮
+    if (target.recommendedState === "ready" || target.recommendedState === "error") {
+      const willOpen = !target.recommendedOpen;
+      set((state) => ({
+        messages: state.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, recommendedOpen: !message.recommendedOpen }
+            : message
+        ),
+        // 仅在“展开”时滚入视口；收起不滚（保持既有引用避免误触发）
+        recommendReveal: willOpen ? { id: messageId } : state.recommendReveal
+      }));
+      return;
+    }
+    // idle：手动发起加载 必展开
+    void get().loadRecommended(messageId);
   }
 }));

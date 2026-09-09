@@ -17,6 +17,11 @@
 
 package com.nageoffer.ai.ragent.infra.chat;
 
+import com.nageoffer.ai.ragent.framework.convention.GroundingChunk;
+import com.nageoffer.ai.ragent.framework.convention.SourceRef;
+
+import java.util.List;
+
 /**
  * 流式响应回调接口（StreamCallback）
  * <p>
@@ -36,6 +41,14 @@ package com.nageoffer.ai.ragent.infra.chat;
  * - onError() 应当捕获所有异常，避免影响客户端体验
  */
 public interface StreamCallback {
+
+    /**
+     * 记录当前回答对应的用户消息 ID
+     *
+     * @param messageId 用户消息 ID
+     */
+    default void onReplyToMessageId(String messageId) {
+    }
 
     /**
      * 接收一次增量内容（Delta Token 或部分片段）
@@ -60,6 +73,26 @@ public interface StreamCallback {
      * @param content 当前推送的思考内容
      */
     default void onThinking(String content) {
+    }
+
+    /**
+     * 接收回答来源（文档级）
+     * <p>
+     * 检索完成后回调一次 由实现方暂存 随完成事件（onComplete）一并下发 默认空实现
+     *
+     * @param sources 文档级来源列表
+     */
+    default void onSources(List<SourceRef> sources) {
+    }
+
+    /**
+     * 接收推荐问题 grounding 片段
+     * <p>
+     * 检索完成后回调一次 由实现方暂存 随 assistant 消息一并落库 供后续推荐追问生成 grounding 默认空实现
+     *
+     * @param chunks grounding 片段列表
+     */
+    default void onGroundingChunks(List<GroundingChunk> chunks) {
     }
 
     /**

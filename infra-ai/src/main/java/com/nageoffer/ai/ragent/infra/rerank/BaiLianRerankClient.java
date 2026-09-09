@@ -73,11 +73,13 @@ public class BaiLianRerankClient implements RerankClient {
             }
         }
 
-        if (topN <= 0 || dedup.size() <= topN) {
+        // 不按「候选没超 topN 就不必截断」早退：精排除了截断还负责重排与出分，
+        // 候选少恰是库里没料的典型形态，早退会让证据闸门在最该拦的时候无分可读
+        if (topN <= 0) {
             return dedup;
         }
 
-        return doRerank(query, dedup, topN, target);
+        return doRerank(query, dedup, Math.min(topN, dedup.size()), target);
     }
 
     private List<RetrievedChunk> doRerank(String query, List<RetrievedChunk> candidates, int topN, ModelTarget target) {
@@ -160,7 +162,14 @@ public class BaiLianRerankClient implements RerankClient {
                 score = item.get("relevance_score").getAsFloat();
             }
 
-            RetrievedChunk hit = score != null ? new RetrievedChunk(src.getId(), src.getText(), score) : src;
+            // 整体拷贝仅覆盖分数：逐字段白名单在 RetrievedChunk 新增字段时会静默漏拷（collectionName 曾因此丢失、意图归属整体失效）
+            // 同一个分写两处：score 会被下游覆写，rerankScore 留给证据闸门
+            RetrievedChunk hit = score != null
+                    ? src.toBuilder()
+                    .score(score)
+                    .rerankScore(score)
+                    .build()
+                    : unscored(src);
             reranked.add(hit);
             addedIds.add(src.getId());
 
@@ -172,7 +181,7 @@ public class BaiLianRerankClient implements RerankClient {
         if (reranked.size() < topN) {
             for (RetrievedChunk c : candidates) {
                 if (addedIds.add(c.getId())) {
-                    reranked.add(c);
+                    reranked.add(unscored(c));
                 }
                 if (reranked.size() >= topN) {
                     break;
@@ -181,6 +190,15 @@ public class BaiLianRerankClient implements RerankClient {
         }
 
         return reranked;
+    }
+
+    /**
+     * 精排没出分的候选压到 0 沉底
+     * 留着 RRF 分会让一个列表里混两把尺子——名次派生的 0.03 反而压过被判为弱相关的 0.01
+     * 不写 {@code rerankScore}，证据闸门据此认出这条没经过精排
+     */
+    private static RetrievedChunk unscored(RetrievedChunk chunk) {
+        return chunk.toBuilder().score(0F).build();
     }
 
     private JsonObject requireOutput(JsonObject respJson) {

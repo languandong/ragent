@@ -4,6 +4,8 @@ export type FeedbackValue = "like" | "dislike" | null;
 
 export type MessageStatus = "streaming" | "done" | "cancelled" | "error";
 
+export type PersistedMessageStatus = "NORMAL" | "INTERRUPTED" | "REJECTED";
+
 export interface User {
   userId: string;
   username?: string;
@@ -20,6 +22,16 @@ export interface Session {
   lastTime?: string;
 }
 
+export interface SourceRef {
+  index?: number;
+  docId: string;
+  docName?: string;
+  sourceType?: string;
+  fileType?: string | null;
+  url?: string | null;
+  excerpt?: string;
+}
+
 export interface Message {
   id: string;
   role: Role;
@@ -31,6 +43,18 @@ export interface Message {
   createdAt?: string;
   feedback?: FeedbackValue;
   status?: MessageStatus;
+  sources?: SourceRef[];
+  recommended?: string[];
+  recommendedState?: "loading" | "ready" | "error";
+  recommendedOpen?: boolean;
+  messageStatus?: PersistedMessageStatus;
+}
+
+export type RecommendedQuestionStatus = "SUCCESS" | "EMPTY" | "FAILED";
+
+export interface RecommendedQuestionsPayload {
+  status: RecommendedQuestionStatus;
+  questions: string[];
 }
 
 export interface StreamMetaPayload {
@@ -46,4 +70,6 @@ export interface MessageDeltaPayload {
 export interface CompletionPayload {
   messageId?: string | null;
   title?: string | null;
+  sources?: SourceRef[];
+  messageStatus?: PersistedMessageStatus;
 }

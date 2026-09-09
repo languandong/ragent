@@ -17,10 +17,12 @@
 
 package com.nageoffer.ai.ragent.mcp.executor;
 
+import cn.hutool.core.map.MapUtil;
+import cn.hutool.core.util.StrUtil;
+import com.nageoffer.ai.ragent.mcp.config.McpToolAnnotations;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
-import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import lombok.extern.slf4j.Slf4j;
@@ -114,22 +116,23 @@ public class SalesMcpExecutor {
                 .name(TOOL_ID)
                 .description("查询软件销售数据，支持按地区、时间、产品、销售人员等维度筛选，支持汇总统计、排名、明细列表等多种查询")
                 .inputSchema(inputSchema)
+                .annotations(McpToolAnnotations.READ_ONLY)
                 .build();
     }
 
     private CallToolResult handleCall(CallToolRequest request) {
         long startMs = System.currentTimeMillis();
         try {
-            Map<String, Object> args = request.arguments() != null ? request.arguments() : Map.of();
-            String region = stringArg(args, "region");
-            String period = stringArg(args, "period");
-            String product = stringArg(args, "product");
-            String salesPerson = stringArg(args, "salesPerson");
-            String queryType = stringArg(args, "queryType");
-            Integer limit = intArg(args, "limit");
+            Map<String, Object> args = McpToolResults.args(request);
+            String region = MapUtil.getStr(args, "region");
+            String period = MapUtil.getStr(args, "period");
+            String product = MapUtil.getStr(args, "product");
+            String salesPerson = MapUtil.getStr(args, "salesPerson");
+            String queryType = MapUtil.getStr(args, "queryType");
+            Integer limit = MapUtil.getInt(args, "limit");
 
-            if (period == null || period.isBlank()) period = "本月";
-            if (queryType == null || queryType.isBlank()) queryType = "summary";
+            if (StrUtil.isBlank(period)) period = "本月";
+            if (StrUtil.isBlank(queryType)) queryType = "summary";
             if (limit == null || limit <= 0) limit = 10;
 
             List<SalesRecord> allData = getOrGenerateData(period);
@@ -144,11 +147,11 @@ public class SalesMcpExecutor {
 
             log.info("MCP 工具调用完成, toolId={}, queryType={}, region={}, period={}, elapsed={}ms",
                     TOOL_ID, queryType, region, period, System.currentTimeMillis() - startMs);
-            return successResult(result);
+            return McpToolResults.success(result);
         } catch (Exception e) {
             log.error("MCP 工具调用失败, toolId={}, elapsed={}ms",
                     TOOL_ID, System.currentTimeMillis() - startMs, e);
-            return errorResult("查询失败: " + e.getMessage());
+            return McpToolResults.error("查询失败: " + e.getMessage());
         }
     }
 
@@ -299,31 +302,6 @@ public class SalesMcpExecutor {
             }
         }
         return records;
-    }
-
-    private static String stringArg(Map<String, Object> args, String key) {
-        Object val = args.get(key);
-        return val != null ? val.toString() : null;
-    }
-
-    private static Integer intArg(Map<String, Object> args, String key) {
-        Object val = args.get(key);
-        if (val instanceof Number n) return n.intValue();
-        return null;
-    }
-
-    private static CallToolResult successResult(String text) {
-        return CallToolResult.builder()
-                .content(List.of(new TextContent(text)))
-                .isError(false)
-                .build();
-    }
-
-    private static CallToolResult errorResult(String message) {
-        return CallToolResult.builder()
-                .content(List.of(new TextContent(message)))
-                .isError(true)
-                .build();
     }
 
     private static class SalesRecord {

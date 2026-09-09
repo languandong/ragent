@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -10,7 +9,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { CheckCircle2, Copy, Eye, LayoutPanelTop, Loader2, XCircle } from "lucide-react";
+import { ArrowUpRight, Copy, Eye, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { RelativeTime } from "@/components/RelativeTime";
 import {
@@ -19,13 +18,12 @@ import {
   type RagTraceRun
 } from "@/services/ragTraceService";
 import { getErrorMessage } from "@/utils/error";
+import { TraceStatusChip } from "@/pages/admin/traces/components/TraceStatusChip";
 import {
   formatDuration,
   normalizeStatus,
   prettifyNodeName,
-  resolveNodeDuration,
-  statusBadgeVariant,
-  statusLabel
+  resolveNodeDuration
 } from "@/pages/admin/traces/traceUtils";
 
 interface RunsTableProps {
@@ -43,28 +41,13 @@ const renderEmptyPlaceholder = () => (
   <span className="trace-list-empty-placeholder">—</span>
 );
 
-const renderTextOrEmpty = (value?: string | null, title?: string) => {
+const renderTextOrEmpty = (value?: string | null, className?: string) => {
   const trimmed = (value ?? "").trim();
   if (!trimmed || trimmed === "-") return renderEmptyPlaceholder();
   return (
-    <span className="trace-list-run-meta-line line-clamp-1" title={title ?? trimmed}>
+    <span className={className ?? "trace-list-run-meta-line"} title={trimmed}>
       {trimmed}
     </span>
-  );
-};
-
-const StatusBadge = ({ status }: { status?: string | null }) => {
-  const normalized = normalizeStatus(status);
-  let Icon = CheckCircle2;
-  if (normalized === "failed" || normalized === "timeout") Icon = XCircle;
-  else if (normalized === "running") Icon = Loader2;
-
-  const isRunning = normalized === "running";
-  return (
-    <Badge className="trace-list-status-badge" variant={statusBadgeVariant(status)}>
-      <Icon className={`h-3 w-3 ${isRunning ? "animate-spin" : ""}`} />
-      <span>{statusLabel(status)}</span>
-    </Badge>
   );
 };
 
@@ -126,10 +109,7 @@ const canonicalNodeKey = (rawName?: string | null): string => {
 
 const computeBriefStats = (nodes: RagTraceNode[]): BriefStats => {
   const totalNodes = nodes.length;
-  const failedNodes = nodes.filter((node) => {
-    const s = normalizeStatus(node.status);
-    return s === "failed" || s === "timeout";
-  }).length;
+  const failedNodes = nodes.filter((node) => normalizeStatus(node.status) === "failed").length;
   const maxDepth = nodes.reduce((max, node) => {
     const d = Number(node.depth ?? 0);
     return Number.isFinite(d) && d > max ? d : max;
@@ -208,9 +188,9 @@ function BriefDialog({ run, onClose, onOpenDetail }: BriefDialogProps) {
       <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
-            <LayoutPanelTop className="h-4 w-4 text-indigo-500" />
+            <Eye className="h-4 w-4 text-indigo-500" />
             <span>链路概览</span>
-            <StatusBadge status={run.status} />
+            <TraceStatusChip status={run.status} />
           </DialogTitle>
         </DialogHeader>
 
@@ -345,7 +325,7 @@ function BriefDialog({ run, onClose, onOpenDetail }: BriefDialogProps) {
               onClose();
             }}
           >
-            <Eye className="h-4 w-4 mr-1.5" />
+            <ArrowUpRight className="h-4 w-4 mr-1.5" />
             查看详情
           </Button>
         </DialogFooter>
@@ -392,7 +372,7 @@ export function RunsTable({
                 {runs.map((run) => (
                   <TableRow key={run.traceId} className="trace-list-table-row">
                     <TableCell className="trace-col-question">
-                      {renderTextOrEmpty(run.question)}
+                      {renderTextOrEmpty(run.question, "trace-list-question-text")}
                     </TableCell>
                     <TableCell className="trace-col-trace-id">
                       <TraceIdCell traceId={run.traceId} />
@@ -407,29 +387,32 @@ export function RunsTable({
                       {run.ttftMs != null ? formatDuration(run.ttftMs) : renderEmptyPlaceholder()}
                     </TableCell>
                     <TableCell className="trace-col-status trace-list-status-cell">
-                      <StatusBadge status={run.status} />
+                      <TraceStatusChip status={run.status} />
                     </TableCell>
                     <TableCell className="trace-col-time">
                       <RelativeTime value={run.startTime ?? undefined} />
                     </TableCell>
                     <TableCell className="trace-col-action trace-list-action-cell">
                       <div className="trace-list-action-group">
+                        {/* 弹窗看一眼用 Eye，跟审计日志列表的详情按钮对齐；跳详情页用 ArrowUpRight 区分「离开当前页」 */}
                         <Button
                           size="sm"
                           variant="outline"
                           className="trace-list-action-btn trace-list-action-btn-primary"
+                          title="弹窗查看节点概览"
                           onClick={() => setBriefRun(run)}
                         >
-                          <LayoutPanelTop className="h-3.5 w-3.5" />
+                          <Eye className="h-3.5 w-3.5" />
                           概览
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
                           className="trace-list-action-btn"
+                          title="进入链路详情页"
                           onClick={() => onOpenRun(run.traceId)}
                         >
-                          <Eye className="h-3.5 w-3.5" />
+                          <ArrowUpRight className="h-3.5 w-3.5" />
                           详情
                         </Button>
                       </div>

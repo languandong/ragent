@@ -2,6 +2,7 @@ import * as React from "react";
 import { Github, Menu } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useGitHubStars } from "@/hooks/useGitHubStars";
 import { useChatStore } from "@/stores/chatStore";
 
 interface HeaderProps {
@@ -10,30 +11,11 @@ interface HeaderProps {
 
 export function Header({ onToggleSidebar }: HeaderProps) {
   const { currentSessionId, sessions } = useChatStore();
-  const [starCount, setStarCount] = React.useState<number | null>(null);
+  const starCount = useGitHubStars();
   const currentSession = React.useMemo(
     () => sessions.find((session) => session.id === currentSessionId),
     [sessions, currentSessionId]
   );
-
-  React.useEffect(() => {
-    let active = true;
-    fetch("https://api.github.com/repos/nageoffer/ragent")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!active) return;
-        const count = typeof data?.stargazers_count === "number" ? data.stargazers_count : null;
-        setStarCount(count);
-      })
-      .catch(() => {
-        if (active) {
-          setStarCount(null);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   const starLabel = React.useMemo(() => {
     if (starCount === null) return "--";

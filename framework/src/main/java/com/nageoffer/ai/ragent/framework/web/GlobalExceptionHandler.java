@@ -29,11 +29,13 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tomcat.util.http.fileupload.impl.FileSizeLimitExceededException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.MessageSourceResolvable;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.Optional;
@@ -65,6 +67,23 @@ public class GlobalExceptionHandler {
                 .orElse(StrUtil.EMPTY);
         log.error("[{}] {} [ex] {}", request.getMethod(), getUrl(request), exceptionStr);
         return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), exceptionStr);
+    }
+
+    /**
+     * 拦截方法参数校验异常
+     * 不接住会落到兜底分支，前端只能看到一句「系统执行出错」
+     */
+    @ExceptionHandler(value = HandlerMethodValidationException.class)
+    public Result<Void> methodValidationExceptionHandler(HttpServletRequest request,
+                                                        HandlerMethodValidationException ex) {
+        String message = ex.getParameterValidationResults().stream()
+                .flatMap(result -> result.getResolvableErrors().stream())
+                .map(MessageSourceResolvable::getDefaultMessage)
+                .filter(StrUtil::isNotBlank)
+                .findFirst()
+                .orElse("请求参数不合法");
+        log.warn("[{}] {} [ex] {}", request.getMethod(), getUrl(request), message);
+        return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), message);
     }
 
     /**

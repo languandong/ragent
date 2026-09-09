@@ -5,6 +5,7 @@ import { MessageItem } from "@/components/chat/MessageItem";
 import { QuestionRail, type QuestionRailItem } from "@/components/chat/QuestionRail";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
 import { cn } from "@/lib/utils";
+import { useChatStore } from "@/stores/chatStore";
 import type { Message } from "@/types";
 
 interface MessageListProps {
@@ -22,6 +23,7 @@ export function MessageList({ messages, isLoading, isStreaming, sessionKey }: Me
   const settleTimerRef = React.useRef<number | null>(null);
   const heightScrollRafRef = React.useRef<number | null>(null);
   const prevStreamingRef = React.useRef(false);
+  const recommendReveal = useChatStore((state) => state.recommendReveal);
   const initialTopMostItemIndex = React.useMemo(
     () => ({ index: "LAST" as const, align: "end" as const }),
     []
@@ -165,7 +167,7 @@ export function MessageList({ messages, isLoading, isStreaming, sessionKey }: Me
       }
       window.removeEventListener("load", handleLoad);
     };
-  }, [messages.length, isStreaming, isLoading, sessionKey]);
+  }, [messages.length, isStreaming, isLoading, sessionKey, scrollToBottom]);
 
   React.useEffect(() => {
     return () => {
@@ -179,6 +181,32 @@ export function MessageList({ messages, isLoading, isStreaming, sessionKey }: Me
       }
     };
   }, []);
+
+  // 展开推荐面板后把该条滚入视口：直接量真实 DOM 几何 不依赖 Virtuoso 的尺寸缓存
+  // 缓存滞后会按面板展开前的旧高度欠滚 使变高的面板落到折叠线下 被输入框遮挡
+  // 面板从骨架→问题会再次变高 故 ready 时会重新触发本效果按最终高度对齐 并在淡入动画结束后补一次精确贴齐
+  React.useEffect(() => {
+    if (!recommendReveal) return;
+    const revealId = recommendReveal.id;
+    const revealBottom = (behavior: ScrollBehavior) => {
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      const el = scroller.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(revealId)}"]`);
+      if (!el) return;
+      const gap = 12; // 面板底部与输入框留出的呼吸间距
+      const delta = el.getBoundingClientRect().bottom - (scroller.getBoundingClientRect().bottom - gap);
+      // 仅在被遮挡时下滚露出 已完整可见则不上滚 避免打断阅读
+      if (delta > 0) {
+        scroller.scrollTo({ top: scroller.scrollTop + delta, behavior });
+      }
+    };
+    const smoothTimer = window.setTimeout(() => revealBottom("smooth"), 100);
+    const snapTimer = window.setTimeout(() => revealBottom("auto"), 420);
+    return () => {
+      window.clearTimeout(smoothTimer);
+      window.clearTimeout(snapTimer);
+    };
+  }, [recommendReveal]);
 
   const handleTotalListHeightChanged = React.useCallback(() => {
     if (isLoading) {
@@ -252,10 +280,10 @@ export function MessageList({ messages, isLoading, isStreaming, sessionKey }: Me
         ref={virtuosoRef}
         data={messages}
         initialTopMostItemIndex={initialTopMostItemIndex}
-        followOutput={(atBottom) => {
-          if (isStreaming) return false;
-          return atBottom ? "auto" : false;
-        }}
+        // 不启用 followOutput 自动贴底：发送/流式贴底由 streaming effect 与 totalListHeightChanged 负责，
+        // 会话加载贴底由布局 effect 负责。若开启，展开推荐/来源等“已到底后条目变高”会被当作新内容触发贴底，
+        // 把变高的最后一条（回答+面板）顶得超出视口、回答被推到可视区上方
+        followOutput={false}
         scrollerRef={(node) => {
           scrollerRef.current = node as HTMLElement | null;
         }}
@@ -265,10 +293,11 @@ export function MessageList({ messages, isLoading, isStreaming, sessionKey }: Me
         components={{ List, Footer }}
         itemContent={(index, message) => (
           <div
+            data-message-id={message.id}
             className={cn(index === messages.length - 1 && "animate-fade-up")}
             onMouseDown={handleTripleClickDown}
           >
-            <MessageItem message={message} isLast={index === messages.length - 1} />
+            <MessageItem message={message} />
           </div>
         )}
       />

@@ -41,7 +41,8 @@
       "WebFetch(domain:www.alibabacloud.com)",
       "Read(//Users/machen/**)",
       "Read(//tmp/**)",
-      "Read(//usr/local/bin/**)"
+      "Read(//usr/local/bin/**)",
+      "Skill(deep-research)"
     ]
   }
 }

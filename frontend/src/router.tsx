@@ -1,14 +1,16 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { LoginPage } from "@/pages/LoginPage";
-import { ChatPage } from "@/pages/ChatPage";
+import { EngineGate } from "@/components/common/EngineGate";
 import { ChangeLogsPage } from "@/pages/ChangeLogsPage";
+import { DocPreviewPage } from "@/pages/DocPreviewPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { AdminLayout } from "@/pages/admin/AdminLayout";
 import { DashboardPage } from "@/pages/admin/dashboard/DashboardPage";
 import { KnowledgeListPage } from "@/pages/admin/knowledge/KnowledgeListPage";
 import { KnowledgeDocumentsPage } from "@/pages/admin/knowledge/KnowledgeDocumentsPage";
 import { KnowledgeChunksPage } from "@/pages/admin/knowledge/KnowledgeChunksPage";
+import { KnowledgeGraphPage } from "@/pages/admin/knowledge-graph/KnowledgeGraphPage";
 import { BizChangeLogPage } from "@/pages/admin/change-logs/BizChangeLogPage";
 import { IntentTreePage } from "@/pages/admin/intent-tree/IntentTreePage";
 import { IntentListPage } from "@/pages/admin/intent-tree/IntentListPage";
@@ -19,6 +21,10 @@ import { RagTraceDetailPage } from "@/pages/admin/traces/RagTraceDetailPage";
 import { SystemSettingsPage } from "@/pages/admin/settings/SystemSettingsPage";
 import { SampleQuestionPage } from "@/pages/admin/sample-questions/SampleQuestionPage";
 import { QueryTermMappingPage } from "@/pages/admin/query-term-mapping/QueryTermMappingPage";
+import { AgentProfilePage } from "@/pages/admin/agents/AgentProfilePage";
+import { AgentPromptPage } from "@/pages/admin/agents/AgentPromptPage";
+import { AgentSkillPage } from "@/pages/admin/agent-skills/AgentSkillPage";
+import { AgentSkillEditPage } from "@/pages/admin/agent-skills/AgentSkillEditPage";
 import { UserListPage } from "@/pages/admin/users/UserListPage";
 import { useAuthStore } from "@/stores/authStore";
 
@@ -75,7 +81,7 @@ export const router = createBrowserRouter([
     path: "/chat",
     element: (
       <RequireAuth>
-        <ChatPage />
+        <EngineGate />
       </RequireAuth>
     )
   },
@@ -83,7 +89,7 @@ export const router = createBrowserRouter([
     path: "/chat/:sessionId",
     element: (
       <RequireAuth>
-        <ChatPage />
+        <EngineGate />
       </RequireAuth>
     )
   },
@@ -92,6 +98,14 @@ export const router = createBrowserRouter([
     element: (
       <RequireAuth>
         <ChangeLogsPage />
+      </RequireAuth>
+    )
+  },
+  {
+    path: "/preview/doc/:docId",
+    element: (
+      <RequireAuth>
+        <DocPreviewPage />
       </RequireAuth>
     )
   },
@@ -122,6 +136,10 @@ export const router = createBrowserRouter([
       {
         path: "knowledge/:kbId/docs/:docId",
         element: <KnowledgeChunksPage />
+      },
+      {
+        path: "knowledge-graph",
+        element: <KnowledgeGraphPage />
       },
       {
         path: "intent-tree",
@@ -162,6 +180,22 @@ export const router = createBrowserRouter([
       {
         path: "mappings",
         element: <QueryTermMappingPage />
+      },
+      {
+        path: "agents",
+        element: <AgentProfilePage />
+      },
+      {
+        path: "agents/:agentId",
+        element: <AgentPromptPage />
+      },
+      {
+        path: "agent-skills",
+        element: <AgentSkillPage />
+      },
+      {
+        path: "agent-skills/:skillId",
+        element: <AgentSkillEditPage />
       },
       {
         path: "users",

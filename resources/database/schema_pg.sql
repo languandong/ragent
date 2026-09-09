@@ -72,6 +72,11 @@ CREATE TABLE t_message (
     content           TEXT        NOT NULL,
     thinking_content  TEXT,
     thinking_duration INTEGER,
+    sources              JSONB,
+    recommended_questions JSONB,
+    retrieved_chunks  JSONB,
+    reply_to_message_id VARCHAR(20),
+    message_status    VARCHAR(16) NOT NULL DEFAULT 'NORMAL',
     create_time       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted           SMALLINT    DEFAULT 0
@@ -182,6 +187,7 @@ CREATE TABLE t_knowledge_document (
     chunk_count      INTEGER       DEFAULT 0,
     file_url         VARCHAR(1024) NOT NULL,
     file_type        VARCHAR(16)   NOT NULL,
+    mime_type        VARCHAR(128),
     file_size        BIGINT,
     process_mode     VARCHAR(16)   DEFAULT 'chunk',
     status           VARCHAR(16)   NOT NULL DEFAULT 'pending',
@@ -189,8 +195,7 @@ CREATE TABLE t_knowledge_document (
     source_location  VARCHAR(1024),
     schedule_enabled SMALLINT,
     schedule_cron    VARCHAR(64),
-    chunk_strategy   VARCHAR(32),
-    chunk_config     JSONB,
+    ingestion_spec   JSONB,
     pipeline_id      VARCHAR(20),
     created_by       VARCHAR(20)   NOT NULL,
     updated_by       VARCHAR(20),
@@ -202,20 +207,21 @@ CREATE INDEX idx_kb_id ON t_knowledge_document (kb_id);
 COMMENT ON TABLE t_knowledge_document IS '知识库文档表';
 
 CREATE TABLE t_knowledge_chunk (
-    id           VARCHAR(20)      NOT NULL PRIMARY KEY,
-    kb_id        VARCHAR(20)      NOT NULL,
-    doc_id       VARCHAR(20)      NOT NULL,
-    chunk_index  INTEGER     NOT NULL,
-    content      TEXT        NOT NULL,
-    content_hash VARCHAR(64),
-    char_count   INTEGER,
-    token_count  INTEGER,
-    enabled      SMALLINT    NOT NULL DEFAULT 1,
-    created_by   VARCHAR(20) NOT NULL,
-    updated_by   VARCHAR(20),
-    create_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    update_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    deleted      SMALLINT    NOT NULL DEFAULT 0
+    id             VARCHAR(20)      NOT NULL PRIMARY KEY,
+    kb_id          VARCHAR(20)      NOT NULL,
+    doc_id         VARCHAR(20)      NOT NULL,
+    chunk_index    INTEGER     NOT NULL,
+    content        TEXT        NOT NULL,
+    content_hash   VARCHAR(64),
+    char_count     INTEGER,
+    token_count    INTEGER,
+    embedding_text TEXT,
+    enabled        SMALLINT    NOT NULL DEFAULT 1,
+    created_by     VARCHAR(20) NOT NULL,
+    updated_by     VARCHAR(20),
+    create_time    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted        SMALLINT    NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_doc_id ON t_knowledge_chunk (doc_id);
 COMMENT ON TABLE t_knowledge_chunk IS '知识库文档分块表';
@@ -225,7 +231,7 @@ CREATE TABLE t_knowledge_document_chunk_log (
     doc_id             VARCHAR(20)      NOT NULL,
     status             VARCHAR(16)      NOT NULL,
     process_mode       VARCHAR(16),
-    chunk_strategy     VARCHAR(16),
+    parse_profile      VARCHAR(16),
     pipeline_id        VARCHAR(20),
     extract_duration   BIGINT,
     chunk_duration     BIGINT,
@@ -301,8 +307,10 @@ CREATE TABLE t_intent_node (
     description           VARCHAR(512),
     examples              TEXT,
     collection_name       VARCHAR(128),
+    collection_names      JSONB        NOT NULL DEFAULT '[]'::jsonb,
     top_k                 INTEGER,
     mcp_tool_id           VARCHAR(128),
+    require_confirm       SMALLINT     NOT NULL DEFAULT 0,
     kind                  SMALLINT     NOT NULL DEFAULT 0,
     prompt_snippet        TEXT,
     prompt_template       TEXT,
@@ -381,6 +389,165 @@ CREATE TABLE t_rag_trace_node (
     CONSTRAINT uk_run_node UNIQUE (trace_id, node_id)
 );
 COMMENT ON TABLE t_rag_trace_node IS 'Trace 节点记录表';
+
+-- ============================================
+-- Agent Profile Tables
+-- ============================================
+
+CREATE TABLE t_agent_profile (
+    id          VARCHAR(20)  NOT NULL PRIMARY KEY,
+    name        VARCHAR(64)  NOT NULL,
+    description VARCHAR(512),
+    avatar      VARCHAR(32),
+    builtin     SMALLINT     NOT NULL DEFAULT 0,
+    active      SMALLINT     NOT NULL DEFAULT 0,
+    create_by   VARCHAR(20),
+    update_by   VARCHAR(20),
+    create_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted     SMALLINT     NOT NULL DEFAULT 0,
+    CONSTRAINT uk_agent_name UNIQUE (name)
+);
+CREATE INDEX idx_agent_active ON t_agent_profile (active);
+COMMENT ON TABLE t_agent_profile IS '智能体人设配置表';
+
+CREATE TABLE t_agent_prompt (
+    id          VARCHAR(20)  NOT NULL PRIMARY KEY,
+    agent_id    VARCHAR(20)  NOT NULL,
+    slot_key    VARCHAR(64)  NOT NULL,
+    content     TEXT,
+    create_by   VARCHAR(20),
+    update_by   VARCHAR(20),
+    create_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted     SMALLINT     NOT NULL DEFAULT 0,
+    CONSTRAINT uk_agent_slot UNIQUE (agent_id, slot_key)
+);
+CREATE INDEX idx_agent_prompt_agent ON t_agent_prompt (agent_id);
+COMMENT ON TABLE t_agent_prompt IS '智能体提示词槽位表';
+
+CREATE TABLE t_agent_skill (
+    id          VARCHAR(20)  NOT NULL PRIMARY KEY,
+    skill_code  VARCHAR(64)  NOT NULL,
+    name        VARCHAR(64)  NOT NULL,
+    description VARCHAR(512) NOT NULL,
+    content     TEXT         NOT NULL,
+    tool_ids    JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    sort_order  INTEGER      NOT NULL DEFAULT 0,
+    enabled     SMALLINT     NOT NULL DEFAULT 1,
+    create_by   VARCHAR(20),
+    update_by   VARCHAR(20),
+    create_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted     SMALLINT     NOT NULL DEFAULT 0
+);
+-- 逻辑删除后 skill_code 应可重新占用，唯一性只约束未删除的行
+CREATE UNIQUE INDEX uk_agent_skill_code ON t_agent_skill (skill_code) WHERE deleted = 0;
+CREATE INDEX idx_agent_skill_enabled ON t_agent_skill (enabled, deleted);
+COMMENT ON TABLE t_agent_skill IS '智能体技能表';
+
+-- ============================================
+-- Agent Engine Tables (v2 ReAct，与 workflow 会话两套分立)
+-- ============================================
+
+CREATE TABLE t_agent_conversation (
+    id              VARCHAR(20) NOT NULL PRIMARY KEY,
+    conversation_id VARCHAR(20) NOT NULL,
+    user_id         VARCHAR(20) NOT NULL,
+    title           VARCHAR(128) NOT NULL,
+    last_time       TIMESTAMP,
+    create_time     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted         SMALLINT    DEFAULT 0
+);
+-- 部分唯一索引：逻辑删的旧行不再占用唯一键，否则删除后同 ID 重开会话必撞约束
+CREATE UNIQUE INDEX uk_agent_conversation_user ON t_agent_conversation (conversation_id, user_id) WHERE deleted = 0;
+CREATE INDEX idx_agent_conv_user_time ON t_agent_conversation (user_id, last_time);
+COMMENT ON TABLE t_agent_conversation IS 'Agent 会话列表';
+
+CREATE TABLE t_agent_message (
+    id                  VARCHAR(20) NOT NULL PRIMARY KEY,
+    conversation_id     VARCHAR(20) NOT NULL,
+    user_id             VARCHAR(20) NOT NULL,
+    role                VARCHAR(16) NOT NULL,
+    content             TEXT,
+    thinking_content    TEXT,
+    blocks              JSONB,
+    reply_to_message_id VARCHAR(20),
+    message_status      VARCHAR(32) NOT NULL DEFAULT 'NORMAL',
+    create_time         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted             SMALLINT    DEFAULT 0
+);
+CREATE INDEX idx_agent_msg_conv ON t_agent_message (conversation_id, user_id, create_time);
+COMMENT ON TABLE t_agent_message IS 'Agent 消息记录';
+
+CREATE TABLE t_agent_state (
+    user_id     VARCHAR(64) NOT NULL,
+    session_id  VARCHAR(64) NOT NULL,
+    state_key   VARCHAR(64) NOT NULL,
+    payload     JSONB,
+    create_time TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, session_id, state_key)
+);
+COMMENT ON TABLE t_agent_state IS 'AgentScope 工作状态存储，payload 为框架自有编码的不透明 JSON';
+
+CREATE TABLE t_agent_context_compaction (
+    id                   VARCHAR(20) NOT NULL PRIMARY KEY,
+    user_id              VARCHAR(20) NOT NULL,
+    conversation_id      VARCHAR(20) NOT NULL,
+    generation           INTEGER     NOT NULL,
+    summary              TEXT,
+    material_msg_count   INTEGER     NOT NULL,
+    material_chars       INTEGER     NOT NULL,
+    summary_chars        INTEGER     NOT NULL,
+    context_chars_before INTEGER     NOT NULL,
+    context_chars_after  INTEGER     NOT NULL,
+    create_time          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_agent_compaction_conv ON t_agent_context_compaction (conversation_id, user_id, create_time);
+COMMENT ON TABLE t_agent_context_compaction IS 'Agent 上下文压缩事件，追加型审计日志，应用侧无读路径';
+
+CREATE TABLE t_agent_memory (
+    id            VARCHAR(20)  NOT NULL PRIMARY KEY,
+    user_id       VARCHAR(20)  NOT NULL,
+    content       VARCHAR(500) NOT NULL,
+    source_type   VARCHAR(16)  NOT NULL,
+    invalid_at    TIMESTAMP,
+    superseded_by VARCHAR(20),
+    create_time   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- 部分索引：读路径只查 ACTIVE，失效行不进索引
+CREATE INDEX idx_agent_memory_active ON t_agent_memory (user_id) WHERE invalid_at IS NULL;
+COMMENT ON TABLE t_agent_memory IS 'Agent长期记忆事实表';
+
+CREATE TABLE t_agent_memory_extraction (
+    id              VARCHAR(20) NOT NULL PRIMARY KEY,
+    user_id         VARCHAR(20) NOT NULL,
+    conversation_id VARCHAR(20) NOT NULL,
+    from_message_id VARCHAR(20) NOT NULL,
+    to_message_id   VARCHAR(20) NOT NULL,
+    status          VARCHAR(16) NOT NULL,
+    trigger_type    VARCHAR(16) NOT NULL,
+    decision_count  INTEGER     NOT NULL DEFAULT 0,
+    attempt_count   INTEGER     NOT NULL DEFAULT 1,
+    create_time     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    settle_time     TIMESTAMP
+);
+CREATE INDEX idx_agent_memory_extraction_conv ON t_agent_memory_extraction (user_id, conversation_id, to_message_id);
+-- 部分唯一索引即分布式 claim：同一会话同时只允许一次在飞抽取
+CREATE UNIQUE INDEX uk_agent_memory_extraction_processing
+    ON t_agent_memory_extraction (user_id, conversation_id) WHERE status = 'PROCESSING';
+COMMENT ON TABLE t_agent_memory_extraction IS 'Agent长期记忆抽取台账';
+
+CREATE TABLE t_agent_memory_control (
+    user_id     VARCHAR(20) NOT NULL PRIMARY KEY,
+    revision    BIGINT      NOT NULL DEFAULT 0,
+    create_time TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+COMMENT ON TABLE t_agent_memory_control IS 'Agent长期记忆控制面';
 
 -- ============================================
 -- Ingestion Pipeline Tables
@@ -505,6 +672,11 @@ COMMENT ON COLUMN t_message.role IS '角色：user/assistant';
 COMMENT ON COLUMN t_message.content IS '消息内容';
 COMMENT ON COLUMN t_message.thinking_content IS '深度思考内容';
 COMMENT ON COLUMN t_message.thinking_duration IS '深度思考耗时（秒）';
+COMMENT ON COLUMN t_message.sources IS '回答来源';
+COMMENT ON COLUMN t_message.recommended_questions IS '推荐追问问题';
+COMMENT ON COLUMN t_message.retrieved_chunks IS '推荐问题 grounding 片段';
+COMMENT ON COLUMN t_message.reply_to_message_id IS '当前助手消息对应的用户消息ID';
+COMMENT ON COLUMN t_message.message_status IS '消息结束状态：NORMAL=正常完成，INTERRUPTED=用户中断，REJECTED=限流拒绝';
 COMMENT ON COLUMN t_message.create_time IS '创建时间';
 COMMENT ON COLUMN t_message.update_time IS '更新时间';
 COMMENT ON COLUMN t_message.deleted IS '是否删除 0：正常 1：删除';
@@ -549,6 +721,7 @@ COMMENT ON COLUMN t_knowledge_document.enabled IS '是否启用 1：启用 0：�
 COMMENT ON COLUMN t_knowledge_document.chunk_count IS '分块数量';
 COMMENT ON COLUMN t_knowledge_document.file_url IS '文件存储路径';
 COMMENT ON COLUMN t_knowledge_document.file_type IS '文件类型';
+COMMENT ON COLUMN t_knowledge_document.mime_type IS '真实MIME类型';
 COMMENT ON COLUMN t_knowledge_document.file_size IS '文件大小（字节）';
 COMMENT ON COLUMN t_knowledge_document.process_mode IS '处理模式：chunk/pipeline';
 COMMENT ON COLUMN t_knowledge_document.status IS '状态：pending/running/success/failed';
@@ -556,8 +729,7 @@ COMMENT ON COLUMN t_knowledge_document.source_type IS '来源类型：file/url';
 COMMENT ON COLUMN t_knowledge_document.source_location IS '来源地址';
 COMMENT ON COLUMN t_knowledge_document.schedule_enabled IS '是否启用定时刷新';
 COMMENT ON COLUMN t_knowledge_document.schedule_cron IS '定时表达式';
-COMMENT ON COLUMN t_knowledge_document.chunk_strategy IS '分块策略';
-COMMENT ON COLUMN t_knowledge_document.chunk_config IS '分块配置JSON';
+COMMENT ON COLUMN t_knowledge_document.ingestion_spec IS '文档级摄取配置：解析档位 + 分块预算';
 COMMENT ON COLUMN t_knowledge_document.pipeline_id IS 'Pipeline ID';
 COMMENT ON COLUMN t_knowledge_document.created_by IS '创建人';
 COMMENT ON COLUMN t_knowledge_document.updated_by IS '修改人';
@@ -574,6 +746,7 @@ COMMENT ON COLUMN t_knowledge_chunk.content IS '分块内容';
 COMMENT ON COLUMN t_knowledge_chunk.content_hash IS '内容哈希';
 COMMENT ON COLUMN t_knowledge_chunk.char_count IS '字符数';
 COMMENT ON COLUMN t_knowledge_chunk.token_count IS 'Token数';
+COMMENT ON COLUMN t_knowledge_chunk.embedding_text IS '向量文本';
 COMMENT ON COLUMN t_knowledge_chunk.enabled IS '是否启用';
 COMMENT ON COLUMN t_knowledge_chunk.created_by IS '创建人';
 COMMENT ON COLUMN t_knowledge_chunk.updated_by IS '修改人';
@@ -586,7 +759,7 @@ COMMENT ON COLUMN t_knowledge_document_chunk_log.id IS 'ID';
 COMMENT ON COLUMN t_knowledge_document_chunk_log.doc_id IS '文档ID';
 COMMENT ON COLUMN t_knowledge_document_chunk_log.status IS '状态';
 COMMENT ON COLUMN t_knowledge_document_chunk_log.process_mode IS '处理模式';
-COMMENT ON COLUMN t_knowledge_document_chunk_log.chunk_strategy IS '分块策略';
+COMMENT ON COLUMN t_knowledge_document_chunk_log.parse_profile IS '解析档位';
 COMMENT ON COLUMN t_knowledge_document_chunk_log.pipeline_id IS 'Pipeline ID';
 COMMENT ON COLUMN t_knowledge_document_chunk_log.extract_duration IS '提取耗时（毫秒）';
 COMMENT ON COLUMN t_knowledge_document_chunk_log.chunk_duration IS '分块耗时（毫秒）';
@@ -645,9 +818,11 @@ COMMENT ON COLUMN t_intent_node.level IS '层级 0：DOMAIN 1：CATEGORY 2：TOP
 COMMENT ON COLUMN t_intent_node.parent_code IS '父节点标识';
 COMMENT ON COLUMN t_intent_node.description IS '语义描述';
 COMMENT ON COLUMN t_intent_node.examples IS '示例问题';
-COMMENT ON COLUMN t_intent_node.collection_name IS '关联的Collection名称';
+COMMENT ON COLUMN t_intent_node.collection_name IS '兼容旧版本，后续删除';
+COMMENT ON COLUMN t_intent_node.collection_names IS '知识库Collection集合';
 COMMENT ON COLUMN t_intent_node.top_k IS '知识库检索TopK';
 COMMENT ON COLUMN t_intent_node.mcp_tool_id IS 'MCP工具ID';
+COMMENT ON COLUMN t_intent_node.require_confirm IS '执行前是否需要用户确认 1：需要 0：不需要';
 COMMENT ON COLUMN t_intent_node.kind IS '类型 0：RAG知识库类 1：SYSTEM系统交互类';
 COMMENT ON COLUMN t_intent_node.prompt_snippet IS '提示词片段';
 COMMENT ON COLUMN t_intent_node.prompt_template IS '提示词模板';
@@ -771,3 +946,115 @@ COMMENT ON COLUMN t_ingestion_task_node.output_json IS '节点输出JSON(全量)
 COMMENT ON COLUMN t_ingestion_task_node.create_time IS '创建时间';
 COMMENT ON COLUMN t_ingestion_task_node.update_time IS '更新时间';
 COMMENT ON COLUMN t_ingestion_task_node.deleted IS '是否删除 0：正常 1：删除';
+
+-- t_agent_profile
+COMMENT ON COLUMN t_agent_profile.id IS '主键ID';
+COMMENT ON COLUMN t_agent_profile.name IS '智能体名称，唯一';
+COMMENT ON COLUMN t_agent_profile.description IS '智能体描述';
+COMMENT ON COLUMN t_agent_profile.avatar IS '头像预设标识，取值由前端预设表定义，认不出时按 id 哈希兜底';
+COMMENT ON COLUMN t_agent_profile.builtin IS '是否内置 0：否 1：是。内置智能体不可编辑不可删除，是所有空槽位的回落终点';
+COMMENT ON COLUMN t_agent_profile.active IS '是否激活 0：否 1：是。全局仅允许一条为 1';
+COMMENT ON COLUMN t_agent_profile.create_by IS '创建人';
+COMMENT ON COLUMN t_agent_profile.update_by IS '更新人';
+COMMENT ON COLUMN t_agent_profile.create_time IS '创建时间';
+COMMENT ON COLUMN t_agent_profile.update_time IS '更新时间';
+COMMENT ON COLUMN t_agent_profile.deleted IS '是否删除 0：正常 1：删除';
+
+-- t_agent_prompt
+COMMENT ON COLUMN t_agent_prompt.id IS '主键ID';
+COMMENT ON COLUMN t_agent_prompt.agent_id IS '所属智能体ID';
+COMMENT ON COLUMN t_agent_prompt.slot_key IS '槽位标识，见 AgentPromptSlot 枚举';
+COMMENT ON COLUMN t_agent_prompt.content IS '提示词全文，空白视为未配置并回落内置智能体';
+COMMENT ON COLUMN t_agent_prompt.create_by IS '创建人';
+COMMENT ON COLUMN t_agent_prompt.update_by IS '更新人';
+COMMENT ON COLUMN t_agent_prompt.create_time IS '创建时间';
+COMMENT ON COLUMN t_agent_prompt.update_time IS '更新时间';
+COMMENT ON COLUMN t_agent_prompt.deleted IS '是否删除 0：正常 1：删除';
+
+-- t_agent_skill
+COMMENT ON COLUMN t_agent_skill.id IS '主键ID';
+COMMENT ON COLUMN t_agent_skill.skill_code IS '技能标识，模型按此名加载正文';
+COMMENT ON COLUMN t_agent_skill.name IS '技能展示名';
+COMMENT ON COLUMN t_agent_skill.description IS '技能适用场景，随清单一起交给模型判断是否加载';
+COMMENT ON COLUMN t_agent_skill.content IS '技能正文 Markdown，模型加载后按此执行';
+COMMENT ON COLUMN t_agent_skill.tool_ids IS '加载技能后才解锁的 MCP 工具 ID，取自意图树 MCP 节点';
+COMMENT ON COLUMN t_agent_skill.sort_order IS '排序，越小越靠前';
+COMMENT ON COLUMN t_agent_skill.enabled IS '是否启用 0：停用 1：启用';
+COMMENT ON COLUMN t_agent_skill.create_by IS '创建人';
+COMMENT ON COLUMN t_agent_skill.update_by IS '更新人';
+COMMENT ON COLUMN t_agent_skill.create_time IS '创建时间';
+COMMENT ON COLUMN t_agent_skill.update_time IS '更新时间';
+COMMENT ON COLUMN t_agent_skill.deleted IS '是否删除 0：正常 1：删除';
+
+-- t_agent_conversation
+COMMENT ON COLUMN t_agent_conversation.id IS '主键ID';
+COMMENT ON COLUMN t_agent_conversation.conversation_id IS '会话ID';
+COMMENT ON COLUMN t_agent_conversation.user_id IS '用户ID';
+COMMENT ON COLUMN t_agent_conversation.title IS '会话标题';
+COMMENT ON COLUMN t_agent_conversation.last_time IS '最后活动时间';
+COMMENT ON COLUMN t_agent_conversation.create_time IS '创建时间';
+COMMENT ON COLUMN t_agent_conversation.update_time IS '更新时间';
+COMMENT ON COLUMN t_agent_conversation.deleted IS '是否删除 0：正常 1：删除';
+
+-- t_agent_message
+COMMENT ON COLUMN t_agent_message.id IS '主键ID';
+COMMENT ON COLUMN t_agent_message.conversation_id IS '会话ID';
+COMMENT ON COLUMN t_agent_message.user_id IS '用户ID';
+COMMENT ON COLUMN t_agent_message.role IS '角色 user：用户 assistant：助手';
+COMMENT ON COLUMN t_agent_message.content IS '消息正文';
+COMMENT ON COLUMN t_agent_message.thinking_content IS '思考内容';
+COMMENT ON COLUMN t_agent_message.blocks IS '运行轨迹块（reasoning/answer/tool 有序序列），回放还原时间线';
+COMMENT ON COLUMN t_agent_message.reply_to_message_id IS '回复的用户消息ID';
+COMMENT ON COLUMN t_agent_message.message_status IS '消息终态 NORMAL：正常 INTERRUPTED：用户中断';
+COMMENT ON COLUMN t_agent_message.create_time IS '创建时间';
+COMMENT ON COLUMN t_agent_message.update_time IS '更新时间';
+COMMENT ON COLUMN t_agent_message.deleted IS '是否删除 0：正常 1：删除';
+
+-- t_agent_state
+COMMENT ON COLUMN t_agent_state.user_id IS '用户ID，匿名会话为 __anon__';
+COMMENT ON COLUMN t_agent_state.session_id IS '会话ID，即 AgentScope 的 sessionId';
+COMMENT ON COLUMN t_agent_state.state_key IS '状态键，AgentScope 侧固定传 agent_state';
+COMMENT ON COLUMN t_agent_state.payload IS '框架自有编码的状态 JSON，业务侧不解析';
+COMMENT ON COLUMN t_agent_state.create_time IS '创建时间';
+COMMENT ON COLUMN t_agent_state.update_time IS '更新时间';
+
+-- t_agent_context_compaction
+COMMENT ON COLUMN t_agent_context_compaction.id IS '主键ID';
+COMMENT ON COLUMN t_agent_context_compaction.user_id IS '用户ID';
+COMMENT ON COLUMN t_agent_context_compaction.conversation_id IS '会话ID，即 AgentScope 的 sessionId';
+COMMENT ON COLUMN t_agent_context_compaction.generation IS '同一会话内的第几代摘要，从 1 起';
+COMMENT ON COLUMN t_agent_context_compaction.summary IS '本代摘要正文，回填进上下文的那一份';
+COMMENT ON COLUMN t_agent_context_compaction.material_msg_count IS '被换出的原文消息条数';
+COMMENT ON COLUMN t_agent_context_compaction.material_chars IS '被换出的原文字符数';
+COMMENT ON COLUMN t_agent_context_compaction.summary_chars IS '摘要正文字符数';
+COMMENT ON COLUMN t_agent_context_compaction.context_chars_before IS '压缩前上下文总字符数';
+COMMENT ON COLUMN t_agent_context_compaction.context_chars_after IS '压缩后上下文总字符数';
+COMMENT ON COLUMN t_agent_context_compaction.create_time IS '创建时间';
+
+-- t_agent_memory
+COMMENT ON COLUMN t_agent_memory.id IS '主键ID';
+COMMENT ON COLUMN t_agent_memory.user_id IS '用户ID';
+COMMENT ON COLUMN t_agent_memory.content IS '记忆正文';
+COMMENT ON COLUMN t_agent_memory.source_type IS '写入来源：FLUSH/BACKGROUND/CONSOLIDATION';
+COMMENT ON COLUMN t_agent_memory.invalid_at IS '失效时刻，NULL 即 ACTIVE';
+COMMENT ON COLUMN t_agent_memory.superseded_by IS '取代者ID，撤回行留空';
+COMMENT ON COLUMN t_agent_memory.create_time IS '创建时间';
+
+-- t_agent_memory_extraction
+COMMENT ON COLUMN t_agent_memory_extraction.id IS '主键ID';
+COMMENT ON COLUMN t_agent_memory_extraction.user_id IS '用户ID';
+COMMENT ON COLUMN t_agent_memory_extraction.conversation_id IS '会话ID，即 AgentScope 的 sessionId';
+COMMENT ON COLUMN t_agent_memory_extraction.from_message_id IS '本批首条用户消息ID';
+COMMENT ON COLUMN t_agent_memory_extraction.to_message_id IS '本批末条用户消息ID，水位取已结束抽取的最大值';
+COMMENT ON COLUMN t_agent_memory_extraction.status IS '抽取状态：PROCESSING/WRITTEN/NOOP/DROPPED/CONFLICT';
+COMMENT ON COLUMN t_agent_memory_extraction.trigger_type IS '触发方：FLUSH/BACKGROUND';
+COMMENT ON COLUMN t_agent_memory_extraction.decision_count IS '实际落库的决策条数';
+COMMENT ON COLUMN t_agent_memory_extraction.attempt_count IS '第几次尝试，达上限记 DROPPED';
+COMMENT ON COLUMN t_agent_memory_extraction.create_time IS '创建时间';
+COMMENT ON COLUMN t_agent_memory_extraction.settle_time IS '抽取结束时刻，非终态为空';
+
+-- t_agent_memory_control
+COMMENT ON COLUMN t_agent_memory_control.user_id IS '用户ID';
+COMMENT ON COLUMN t_agent_memory_control.revision IS '记忆集版本号，提交期与水位一同双校验';
+COMMENT ON COLUMN t_agent_memory_control.create_time IS '建行时刻，兼作抽取下界：更早的历史消息不倒灌';
+COMMENT ON COLUMN t_agent_memory_control.update_time IS '更新时间';

@@ -45,7 +45,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -65,6 +68,12 @@ public abstract class AbstractOpenAIStyleChatClient implements ChatClient {
 
     protected Gson gson = new Gson();
 
+    /**
+     * 按档位超时预算派生的同步客户端缓存（key=timeoutMs）
+     * 档位超时值仅少数几种，派生客户端经 newBuilder 复用连接池/线程池，缓存后避免每次调用重建
+     */
+    private final Map<Long, OkHttpClient> syncClientByTimeout = new ConcurrentHashMap<>();
+
     // ==================== 子类钩子方法 ====================
 
     /**
@@ -75,12 +84,22 @@ public abstract class AbstractOpenAIStyleChatClient implements ChatClient {
     }
 
     /**
+     * 提供商是否认识 enable_thinking
+     * <p>
+     * 该字段是 DashScope 系的私有扩展，OpenAI 兼容协议本身没有，发给不认识它的网关会被判为
+     * unknown_parameter 直接 400，因此默认不发，由具体提供商声明
+     */
+    protected boolean supportsEnableThinkingParam() {
+        return false;
+    }
+
+    /**
      * 子类可覆写此方法添加提供商特有的请求体字段
-     * 默认实现：当请求开启 thinking 时添加 enable_thinking 字段
+     * 默认实现：仅对认识该字段的提供商显式声明思考开关（Qwen3 系不显式关会默认开启思考）
      */
     protected void customizeRequestBody(JsonObject body, ChatRequest request) {
-        if (Boolean.TRUE.equals(request.getThinking())) {
-            body.addProperty("enable_thinking", true);
+        if (supportsEnableThinkingParam()) {
+            body.addProperty("enable_thinking", Boolean.TRUE.equals(request.getThinking()));
         }
     }
 
@@ -104,8 +123,10 @@ public abstract class AbstractOpenAIStyleChatClient implements ChatClient {
                 .post(RequestBody.create(reqBody.toString(), HttpMediaTypes.JSON))
                 .build();
 
+        Call httpCall = resolveSyncClient(target.timeoutMs()).newCall(requestHttp);
+
         JsonObject respJson;
-        try (Response response = syncHttpClient.newCall(requestHttp).execute()) {
+        try (Response response = httpCall.execute()) {
             if (!response.isSuccessful()) {
                 String body = HttpResponseHelper.readBody(response.body());
                 log.warn("{} 同步请求失败: status={}, body={}", provider(), response.code(), body);
@@ -123,6 +144,21 @@ public abstract class AbstractOpenAIStyleChatClient implements ChatClient {
         }
 
         return extractChatContent(respJson);
+    }
+
+    /**
+     * 取按档位超时预算派生的同步客户端；timeoutMs 为空时用基础客户端（走 HttpClientConfig 默认超时）
+     * <p>
+     * connect/write 沿用基础客户端（请求体小、连接建立无需占用整段预算），仅覆盖 read/call
+     */
+    private OkHttpClient resolveSyncClient(Long timeoutMs) {
+        if (timeoutMs == null) {
+            return syncHttpClient;
+        }
+        return syncClientByTimeout.computeIfAbsent(timeoutMs, ms -> syncHttpClient.newBuilder()
+                .readTimeout(ms, TimeUnit.MILLISECONDS)
+                .callTimeout(ms, TimeUnit.MILLISECONDS)
+                .build());
     }
 
     // ==================== 模板方法：流式调用 ====================
@@ -178,9 +214,6 @@ public abstract class AbstractOpenAIStyleChatClient implements ChatClient {
                 );
             }
             ResponseBody body = response.body();
-            if (body == null) {
-                throw new ModelClientException(provider() + " 流式响应为空", ModelClientErrorType.INVALID_RESPONSE, null);
-            }
             BufferedSource source = body.source();
             boolean completed = false;
             while (!cancelled.get()) {
@@ -299,6 +332,10 @@ public abstract class AbstractOpenAIStyleChatClient implements ChatClient {
         if (message == null || !message.has("content") || message.get("content").isJsonNull()) {
             throw new ModelClientException(provider() + " 响应缺少 content", ModelClientErrorType.INVALID_RESPONSE, null);
         }
-        return message.get("content").getAsString();
+        String content = message.get("content").getAsString();
+        if (content.isBlank()) {
+            throw new ModelClientException(provider() + " 响应 content 为空白", ModelClientErrorType.INVALID_RESPONSE, null);
+        }
+        return content;
     }
 }

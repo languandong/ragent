@@ -17,10 +17,12 @@
 
 package com.nageoffer.ai.ragent.mcp.executor;
 
+import cn.hutool.core.map.MapUtil;
+import cn.hutool.core.util.StrUtil;
+import com.nageoffer.ai.ragent.mcp.config.McpToolAnnotations;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
-import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import lombok.extern.slf4j.Slf4j;
@@ -147,22 +149,23 @@ public class TicketMcpExecutor {
                 .name(TOOL_ID)
                 .description("查询客户技术支持工单数据，支持按地区、状态、优先级、产品、客户等维度筛选，支持汇总概览、工单列表、统计分析等多种查询")
                 .inputSchema(inputSchema)
+                .annotations(McpToolAnnotations.READ_ONLY)
                 .build();
     }
 
     private CallToolResult handleCall(CallToolRequest request) {
         long startMs = System.currentTimeMillis();
         try {
-            Map<String, Object> args = request.arguments() != null ? request.arguments() : Map.of();
-            String region = stringArg(args, "region");
-            String status = stringArg(args, "status");
-            String priority = stringArg(args, "priority");
-            String product = stringArg(args, "product");
-            String customerName = stringArg(args, "customerName");
-            String queryType = stringArg(args, "queryType");
-            Integer limit = intArg(args, "limit");
+            Map<String, Object> args = McpToolResults.args(request);
+            String region = MapUtil.getStr(args, "region");
+            String status = MapUtil.getStr(args, "status");
+            String priority = MapUtil.getStr(args, "priority");
+            String product = MapUtil.getStr(args, "product");
+            String customerName = MapUtil.getStr(args, "customerName");
+            String queryType = MapUtil.getStr(args, "queryType");
+            Integer limit = MapUtil.getInt(args, "limit");
 
-            if (queryType == null || queryType.isBlank()) queryType = "summary";
+            if (StrUtil.isBlank(queryType)) queryType = "summary";
             if (limit == null || limit <= 0) limit = 10;
 
             List<TicketRecord> allData = getOrGenerateData();
@@ -176,11 +179,11 @@ public class TicketMcpExecutor {
 
             log.info("MCP 工具调用完成, toolId={}, queryType={}, region={}, status={}, elapsed={}ms",
                     TOOL_ID, queryType, region, status, System.currentTimeMillis() - startMs);
-            return successResult(result);
+            return McpToolResults.success(result);
         } catch (Exception e) {
             log.error("MCP 工具调用失败, toolId={}, elapsed={}ms",
                     TOOL_ID, System.currentTimeMillis() - startMs, e);
-            return errorResult("查询失败: " + e.getMessage());
+            return McpToolResults.error("查询失败: " + e.getMessage());
         }
     }
 
@@ -372,31 +375,6 @@ public class TicketMcpExecutor {
             }
         }
         return records;
-    }
-
-    private static String stringArg(Map<String, Object> args, String key) {
-        Object val = args.get(key);
-        return val != null ? val.toString() : null;
-    }
-
-    private static Integer intArg(Map<String, Object> args, String key) {
-        Object val = args.get(key);
-        if (val instanceof Number n) return n.intValue();
-        return null;
-    }
-
-    private static CallToolResult successResult(String text) {
-        return CallToolResult.builder()
-                .content(List.of(new TextContent(text)))
-                .isError(false)
-                .build();
-    }
-
-    private static CallToolResult errorResult(String message) {
-        return CallToolResult.builder()
-                .content(List.of(new TextContent(message)))
-                .isError(true)
-                .build();
     }
 
     private static class TicketRecord {

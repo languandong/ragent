@@ -21,6 +21,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 对话消息实体
  *
@@ -76,6 +78,15 @@ public class ChatMessage {
     }
 
     /**
+     * 消息结束状态
+     */
+    public enum MessageStatus {
+        NORMAL,
+        INTERRUPTED,
+        REJECTED
+    }
+
+    /**
      * 当前消息的角色（系统 / 用户 / 助手）
      */
     private Role role;
@@ -94,6 +105,26 @@ public class ChatMessage {
      * 深度思考耗时（秒，仅 ASSISTANT 角色可能携带）
      */
     private Integer thinkingDuration;
+
+    /**
+     * 回答来源（文档级来源列表，仅 ASSISTANT 角色可能携带）
+     */
+    private List<SourceRef> sources;
+
+    /**
+     * 推荐问题 grounding 片段（仅 ASSISTANT 角色可能携带，随消息落库供推荐追问生成 grounding，不参与模型上下文）
+     */
+    private List<GroundingChunk> retrievedChunks;
+
+    /**
+     * 当前助手消息对应的用户消息 ID
+     */
+    private String replyToMessageId;
+
+    /**
+     * 消息结束状态
+     */
+    private MessageStatus messageStatus = MessageStatus.NORMAL;
 
     public ChatMessage(Role role, String content) {
         this.role = role;
