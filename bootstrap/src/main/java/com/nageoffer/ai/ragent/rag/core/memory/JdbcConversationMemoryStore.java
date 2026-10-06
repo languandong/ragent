@@ -53,6 +53,7 @@ public class JdbcConversationMemoryStore implements ConversationMemoryStore {
     @Override
     public List<ChatMessage> loadHistory(String conversationId, String userId) {
         int maxMessages = resolveMaxHistoryMessages();
+        // 返回最近的n条历史对话
         List<ConversationMessageVO> dbMessages = conversationMessageService.listMessages(
                 conversationId,
                 userId,

@@ -147,15 +147,15 @@ ai:
       endpoints:
         chat: /compatible-mode/v1/chat/completions
         rerank: /api/v1/services/rerank/text-rerank/text-rerank
-    aihubmix:
-      url: https://aihubmix.com
-      api-key: ${AIHUBMIX_API_KEY:}
-      endpoints:
-        chat: /v1/chat/completions
-        embedding: /v1/embeddings
+#    aihubmix:
+#      url: https://aihubmix.com
+#      api-key: ${AIHUBMIX_API_KEY:}
+#      endpoints:
+#        chat: /v1/chat/completions
+#        embedding: /v1/embeddings
     siliconflow:
       url: https://api.siliconflow.cn
-      api-key: sk-phaiblvjebdngtryhxaygrzmyzsmmnslrtqdaesreeqyfyci
+      api-key: sk-hkzomqmhbxexansxxvehrdwylrggmpkmtqxymqupmoyxxzdr
       endpoints:
         chat: /v1/chat/completions
         embedding: /v1/embeddings
@@ -202,11 +202,11 @@ ai:
         model: Qwen/Qwen3-Embedding-8B
         dimension: ${rag.default.dimension}
         priority: 1
-  #      - id: qwen-emb-local
-  #        provider: ollama
-  #        model: qwen3-embedding:8b-fp16
-  #        dimension: ${rag.default.dimension}
-  #        priority: 2
+      #      - id: qwen-emb-local
+      #        provider: ollama
+      #        model: qwen3-embedding:8b-fp16
+      #        dimension: ${rag.default.dimension}
+      #        priority: 2
       - id: text-embedding-3-large
         provider: aihubmix
         model: text-embedding-3-large

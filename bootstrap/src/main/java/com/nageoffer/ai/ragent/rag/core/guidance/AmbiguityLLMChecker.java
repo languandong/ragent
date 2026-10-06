@@ -53,6 +53,7 @@ public class AmbiguityLLMChecker {
      * 调用 LLM 确认是否存在歧义
      */
     public boolean checkAmbiguity(String question, List<NodeScore> ranked) {
+        // 只把当前问题和候选路径/分数交给 LLM，不重新执行意图分类。
         String candidatesText = buildCandidatesText(ranked);
         String prompt = promptTemplateLoader.render(
                 GUIDANCE_AMBIGUITY_CHECK_PROMPT_PATH,
@@ -78,6 +79,7 @@ public class AmbiguityLLMChecker {
 
             if (!root.isJsonObject()) {
                 log.warn("歧义确认 LLM 返回非 JSON 对象: {}", raw);
+                // 无法可靠判断时优先澄清，避免带着错误意图继续检索。
                 return true;
             }
 
@@ -90,6 +92,7 @@ public class AmbiguityLLMChecker {
             }
 
             log.warn("歧义确认 LLM 返回缺少 ambiguous 字段: {}", raw);
+            // 返回格式不完整时采用保守策略：触发澄清。
             return true;
         } catch (Exception e) {
             log.warn("歧义确认 LLM 调用失败, 降级为触发澄清, question={}", question, e);

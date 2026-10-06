@@ -88,11 +88,12 @@ public class ConversationMessageServiceImpl implements ConversationMessageServic
         if (!asc) {
             Collections.reverse(records);
         }
-
+        // 获取模型回答
         List<String> assistantMessageIds = records.stream()
                 .filter(record -> "assistant".equalsIgnoreCase(record.getRole()))
                 .map(ConversationMessageDO::getId)
                 .toList();
+        // 获取用户反馈信息
         Map<String, Integer> votesByMessageId = feedbackService.getUserVotes(userId, assistantMessageIds);
 
         List<ConversationMessageVO> result = new ArrayList<>();

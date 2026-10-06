@@ -34,6 +34,9 @@ import com.nageoffer.ai.ragent.rag.service.ConversationGroupService;
 
 import java.util.Optional;
 
+/**
+ * 大模型每产生一段结果，就会调用这个对象
+ */
 @Slf4j
 public class StreamChatEventHandler implements StreamCallback {
 
@@ -80,7 +83,9 @@ public class StreamChatEventHandler implements StreamCallback {
      * 初始化：发送元数据事件并注册任务
      */
     private void initialize() {
+        // 立即发送第一个 SSE 事件 前端收到 conversationId 和 taskId
         sender.sendEvent(SSEEventType.META.value(), new MetaPayload(conversationId, taskId));
+        // 把任务注册到 StreamTaskManager，这样用户点击“停止生成”可通过 taskId 找到当前任务
         taskManager.register(taskId, sender, this::buildCompletionPayloadOnCancel);
     }
 

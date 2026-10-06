@@ -53,29 +53,35 @@ public class IntentGuidanceService {
 
     @RagTraceNode(name = "guidance-detect", type = "GUIDANCE")
     public GuidanceDecision detectAmbiguity(String question, List<SubQuestionIntent> subIntents) {
+        // 总开关关闭时完全跳过引导式问答。
         if (!Boolean.TRUE.equals(guidanceProperties.getEnabled())) {
             return GuidanceDecision.none();
         }
 
+        // 先通过候选数量、所属系统和分数接近程度判断是否确实需要用户澄清。
         AmbiguityGroup group = findAmbiguityGroup(question, subIntents);
         if (group == null || CollUtil.isEmpty(group.ranked())) {
             return GuidanceDecision.none();
         }
 
+        // 将候选路径渲染成编号选项，例如“1) 业务系统 > OA系统 > 数据安全”。
         String prompt = buildPrompt(group.topicName(), group.ranked());
         return GuidanceDecision.prompt(prompt);
     }
 
     private AmbiguityGroup findAmbiguityGroup(String question, List<SubQuestionIntent> subIntents) {
+        // 多子问题已经由改写阶段拆清楚；这里只处理一个问题对应多个候选的歧义场景。
         if (CollUtil.isEmpty(subIntents) || subIntents.size() != 1) {
             return null;
         }
 
+        // 引导只针对达到最低分数的 KB 意图，SYSTEM 和 MCP 意图不参与。
         List<NodeScore> candidates = filterCandidates(subIntents.get(0).nodeScores());
         if (candidates.size() < 2) {
             return null;
         }
 
+        // 同一系统下可能命中多个叶子节点；每个系统只保留得分最高的一个，避免重复选项。
         Map<String, NodeScore> systemBest = candidates.stream()
                 .filter(ns -> StrUtil.isNotBlank(resolveSystemNodeId(ns.getNode())))
                 .collect(Collectors.toMap(
@@ -92,14 +98,17 @@ public class IntentGuidanceService {
             return null;
         }
 
+        // 第一名明显领先，或者问题中已经明确写出系统名时，不再打断用户进行澄清。
         if (shouldSkipGuidance(question, ranked)) {
             return null;
         }
 
+        // 分数非常接近时直接确认歧义；处于边界区间时再交给 LLM 二次判断。
         if (!confirmAmbiguity(question, ranked)) {
             return null;
         }
 
+        // 限制展示数量，防止一次返回过多选项。
         List<NodeScore> trimmedRanked = trimRankedOptions(ranked);
         String topicName = trimmedRanked.get(0).getNode().getName();
         return new AmbiguityGroup(topicName, trimmedRanked);
@@ -152,11 +161,13 @@ public class IntentGuidanceService {
         double threshold = guidanceProperties.getAmbiguityScoreRatio();
         double margin = guidanceProperties.getAmbiguityMargin();
 
+        // 第二名/第一名达到阈值，说明两个候选足够接近，直接要求用户选择。
         if (ratio >= threshold) {
             log.info("分数比值(ratio={})超过阈值({}), 判定为歧义", ratio, threshold);
             return true;
         }
 
+        // 边界区间仅靠分数难以判断，通过一次轻量 LLM 调用确认语义上是否真的有歧义。
         if (ratio >= threshold - margin) {
             log.info("分数比值(ratio={})在边界区间[{}, {}), 调 LLM 确认", ratio, threshold - margin, threshold);
             return ambiguityLLMChecker.checkAmbiguity(question, ranked);
@@ -203,6 +214,7 @@ public class IntentGuidanceService {
         if (node == null) {
             return "";
         }
+        // 从叶子向上查找 DOMAIN 下的一级 CATEGORY，并以它作为“所属系统”的分组键。
         IntentNode current = node;
         IntentNode parent = fetchParent(current);
         for (; ; ) {

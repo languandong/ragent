@@ -96,25 +96,36 @@ public class JdbcConversationMemorySummaryService implements ConversationMemoryS
         return ChatMessage.system(wrapped);
     }
 
+    /**
+     * 将较早的对话压缩成摘要，同时保留最近若干轮原文。
+     * <p>
+     * 摘要采用增量更新：如果已经存在旧摘要，只查询旧摘要之后、最近原文之前的消息，
+     * 再让大模型把这些消息合并进旧摘要。这样不需要每次重新总结整段会话。
+     * </p>
+     */
     private void doCompressIfNeeded(String conversationId, String userId) {
         long startTime = System.currentTimeMillis();
+        // triggerTurns：达到多少轮后开始摘要；maxTurns：始终保留原文的最近轮数。
         int triggerTurns = memoryProperties.getSummaryStartTurns();
         int maxTurns = memoryProperties.getHistoryKeepTurns();
         if (maxTurns <= 0 || triggerTurns <= 0) {
             return;
         }
 
+        // 同一用户的同一会话只允许一个摘要任务执行，避免并发生成重复摘要。
         String lockKey = SUMMARY_LOCK_PREFIX + buildLockKey(conversationId, userId);
         RLock lock = redissonClient.getLock(lockKey);
         if (!lock.tryLock()) {
             return;
         }
         try {
+            // 用户消息数代表对话轮数；未达到阈值时，继续保留全部原文即可。
             long total = conversationGroupService.countUserMessages(conversationId, userId);
             if (total < triggerTurns) {
                 return;
             }
 
+            // 读取旧摘要，并找出最近 maxTurns 个用户轮次。最近这些轮次不会被压缩。
             ConversationSummaryDO latestSummary = conversationGroupService.findLatestSummary(conversationId, userId);
             List<ConversationMessageDO> latestUserTurns = conversationGroupService.listLatestUserOnlyMessages(
                     conversationId,
@@ -124,16 +135,20 @@ public class JdbcConversationMemorySummaryService implements ConversationMemoryS
             if (latestUserTurns.isEmpty()) {
                 return;
             }
+            // cutoffId 是“最近原文区间”的起点；ID 小于它的消息才允许进入摘要。
             String cutoffId = resolveCutoffId(latestUserTurns);
             if (StrUtil.isBlank(cutoffId)) {
                 return;
             }
 
+            // afterId 是旧摘要已经覆盖到的最后一条消息；首次摘要时为 null。
             String afterId = resolveSummaryStartId(conversationId, userId, latestSummary);
+            // 旧摘要已经追上原文保留区间，没有新增消息需要压缩。
             if (afterId != null && Long.parseLong(afterId) >= Long.parseLong(cutoffId)) {
                 return;
             }
 
+            // 查询待摘要区间：(afterId, cutoffId)，两个边界都不包含。
             List<ConversationMessageDO> toSummarize = conversationGroupService.listMessagesBetweenIds(
                     conversationId,
                     userId,
@@ -149,12 +164,14 @@ public class JdbcConversationMemorySummaryService implements ConversationMemoryS
                 return;
             }
 
+            // 将本次待压缩消息合并进旧摘要，而不是从头重新总结整个会话。
             String existingSummary = latestSummary == null ? "" : latestSummary.getContent();
             String summary = summarizeMessages(toSummarize, existingSummary);
             if (StrUtil.isBlank(summary)) {
                 return;
             }
 
+            // 保存新版本及其覆盖到的消息 ID，供下一次增量摘要确定起点。
             createSummary(conversationId, userId, summary, lastMessageId);
             log.info("摘要成功 - conversationId：{}，userId：{}，消息数：{}，耗时：{}ms",
                     conversationId, userId, toSummarize.size(),
@@ -169,11 +186,12 @@ public class JdbcConversationMemorySummaryService implements ConversationMemoryS
     }
 
     private String summarizeMessages(List<ConversationMessageDO> messages, String existingSummary) {
+        // 将历史消息封装成ChatMessage
         List<ChatMessage> histories = toHistoryMessages(messages);
         if (CollUtil.isEmpty(histories)) {
             return existingSummary;
         }
-
+        // 组装生成摘要的系统提示词
         int summaryMaxChars = memoryProperties.getSummaryMaxChars();
         List<ChatMessage> summaryMessages = new ArrayList<>();
         String summaryPrompt = promptTemplateLoader.render(
@@ -181,13 +199,14 @@ public class JdbcConversationMemorySummaryService implements ConversationMemoryS
                 Map.of("summary_max_chars", String.valueOf(summaryMaxChars))
         );
         summaryMessages.add(ChatMessage.system(summaryPrompt));
-
+        // 历史摘要
         if (StrUtil.isNotBlank(existingSummary)) {
             summaryMessages.add(ChatMessage.assistant(
                     "历史摘要（仅用于合并去重，不得作为事实新增来源；若与本轮对话冲突，以本轮对话为准）：\n"
                             + existingSummary.trim()
             ));
         }
+        // 历史消息  新增的摘要
         summaryMessages.addAll(histories);
         summaryMessages.add(ChatMessage.user(
                 "合并以上对话与历史摘要，去重后输出更新摘要。要求：严格≤" + summaryMaxChars + "字符；仅一行。"

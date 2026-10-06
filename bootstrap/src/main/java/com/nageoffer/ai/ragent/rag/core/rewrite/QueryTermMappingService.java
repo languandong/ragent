@@ -44,7 +44,7 @@ public class QueryTermMappingService {
         if (text == null || text.isEmpty()) {
             return text;
         }
-
+        // 加载术语转换规则
         List<QueryTermMappingDO> mappings = loadMappings();
         if (mappings.isEmpty()) {
             return text;
@@ -76,6 +76,7 @@ public class QueryTermMappingService {
      * 加载映射规则：优先从 Redis 缓存读取，缓存未命中则从数据库加载并回填缓存
      */
     private List<QueryTermMappingDO> loadMappings() {
+        // 从Redis中读取关键词
         List<QueryTermMappingDO> cached = cacheManager.getMappingsFromCache();
         if (CollUtil.isNotEmpty(cached)) {
             return cached;

@@ -50,9 +50,11 @@ public class StreamCallbackFactory {
                                                  String conversationId,
                                                  String taskId) {
         StreamChatHandlerParams params = StreamChatHandlerParams.builder()
+                // 当前请求数据
                 .emitter(emitter)
                 .conversationId(conversationId)
                 .taskId(taskId)
+                // Spring服务
                 .modelProperties(modelProperties)
                 .memoryService(memoryService)
                 .conversationGroupService(conversationGroupService)

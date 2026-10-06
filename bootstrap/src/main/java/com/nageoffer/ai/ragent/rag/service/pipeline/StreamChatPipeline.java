@@ -117,13 +117,16 @@ public class StreamChatPipeline {
     }
 
     private boolean handleGuidance(StreamChatContext ctx) {
+        // 使用改写后的完整问题和意图候选判断是否存在跨系统/分类歧义。
         GuidanceDecision decision = guidanceService.detectAmbiguity(
                 ctx.getRewriteResult().rewrittenQuestion(),
                 ctx.getSubIntents()
         );
+        // 无需澄清时返回 false，由 execute() 继续执行系统意图判断和知识检索。
         if (!decision.isPrompt()) {
             return false;
         }
+        // 已生成澄清选项时直接回复用户并结束本次流式请求，等待用户下一轮选择。
         StreamCallback callback = ctx.getCallback();
         callback.onContent(decision.getPrompt());
         callback.onComplete();
