@@ -8,7 +8,15 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -24,7 +32,10 @@ import {
   type IntentNodeTree,
   type IntentNodeUpdatePayload
 } from "@/services/intentTreeService";
+import type { KnowledgeBase } from "@/services/knowledgeService";
+import { getKnowledgeBases } from "@/services/knowledgeService";
 import { getErrorMessage } from "@/utils/error";
+import { KnowledgeBaseMultiSelect } from "./KnowledgeBaseMultiSelect";
 
 const ROOT_PARENT = "__ROOT__";
 
@@ -46,16 +57,16 @@ const formSchema = z.object({
   level: z.number(),
   kind: z.number(),
   parentCode: z.string().optional(),
-  collectionName: z.string().optional(),
+  collectionNames: z.array(z.string()),
   mcpToolId: z.string().optional(),
+  requireConfirm: z.boolean(),
   description: z.string().optional(),
   examplesText: z.string().optional(),
   topK: z.number().int().positive("TopK 必须大于 0").optional(),
   sortOrder: z.number().int().optional(),
   enabled: z.boolean(),
   promptSnippet: z.string().optional(),
-  promptTemplate: z.string().optional(),
-  paramPromptTemplate: z.string().optional()
+  promptTemplate: z.string().optional()
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -70,13 +81,14 @@ type FlatIntentNode = {
   description?: string | null;
   examples?: string | null;
   collectionName?: string | null;
+  collectionNames?: string[] | null;
   mcpToolId?: string | null;
+  requireConfirm: number;
   topK?: number | null;
   enabled: number;
   sortOrder: number;
   promptSnippet?: string | null;
   promptTemplate?: string | null;
-  paramPromptTemplate?: string | null;
   pathText: string;
 };
 
@@ -114,13 +126,14 @@ const flattenIntentTree = (
       description: node.description,
       examples: node.examples,
       collectionName: node.collectionName,
+      collectionNames: node.collectionNames,
       mcpToolId: node.mcpToolId,
+      requireConfirm: node.requireConfirm === 1 ? 1 : 0,
       topK: node.topK,
       enabled: node.enabled === 0 ? 0 : 1,
       sortOrder: node.sortOrder ?? 0,
       promptSnippet: node.promptSnippet,
       promptTemplate: node.promptTemplate,
-      paramPromptTemplate: node.paramPromptTemplate,
       pathText: currentPath.join(" > ")
     });
     result.push(...flattenIntentTree(children, currentPath));
@@ -134,16 +147,16 @@ const emptyDefaults: FormValues = {
   level: 0,
   kind: 0,
   parentCode: ROOT_PARENT,
-  collectionName: "",
+  collectionNames: [],
   mcpToolId: "",
+  requireConfirm: false,
   description: "",
   examplesText: "",
   topK: undefined,
   sortOrder: 0,
   enabled: true,
   promptSnippet: "",
-  promptTemplate: "",
-  paramPromptTemplate: ""
+  promptTemplate: ""
 };
 
 export function IntentEditPage() {
@@ -151,6 +164,7 @@ export function IntentEditPage() {
   const { id: routeId } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const [tree, setTree] = useState<IntentNodeTree[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -215,16 +229,20 @@ export function IntentEditPage() {
       level: currentNode.level ?? 0,
       kind: currentNode.kind ?? 0,
       parentCode: currentNode.parentCode || ROOT_PARENT,
-      collectionName: currentNode.collectionName || "",
+      collectionNames: currentNode.collectionNames?.length
+        ? currentNode.collectionNames
+        : currentNode.collectionName
+          ? [currentNode.collectionName]
+          : [],
       mcpToolId: currentNode.mcpToolId || "",
+      requireConfirm: currentNode.requireConfirm === 1,
       description: currentNode.description || "",
       examplesText: parseExamples(currentNode.examples).join("\n"),
       topK: currentNode.topK ?? undefined,
       sortOrder: currentNode.sortOrder ?? 0,
       enabled: currentNode.enabled !== 0,
       promptSnippet: currentNode.promptSnippet || "",
-      promptTemplate: currentNode.promptTemplate || "",
-      paramPromptTemplate: currentNode.paramPromptTemplate || ""
+      promptTemplate: currentNode.promptTemplate || ""
     };
   }, [currentNode]);
 
@@ -237,8 +255,12 @@ export function IntentEditPage() {
     const loadTree = async () => {
       try {
         setLoading(true);
-        const data = await getIntentTree();
-        setTree(data || []);
+        const [treeData, knowledgeBaseData] = await Promise.all([
+          getIntentTree(),
+          getKnowledgeBases()
+        ]);
+        setTree(treeData || []);
+        setKnowledgeBases(knowledgeBaseData || []);
       } catch (error) {
         toast.error(getErrorMessage(error, "加载意图节点失败"));
         console.error(error);
@@ -257,6 +279,10 @@ export function IntentEditPage() {
 
   const handleSubmit = async (values: FormValues) => {
     if (!currentNode) return;
+    if (values.kind === 0 && values.level === 2 && values.collectionNames.length === 0) {
+      form.setError("collectionNames", { message: "TOPIC 节点请至少选择一个知识库" });
+      return;
+    }
     if (values.kind === 2 && !values.mcpToolId?.trim()) {
       form.setError("mcpToolId", { message: "MCP节点必须填写工具ID" });
       return;
@@ -276,15 +302,16 @@ export function IntentEditPage() {
       parentCode,
       description: values.description?.trim() || "",
       examples,
-      collectionName: values.kind === 0 ? values.collectionName?.trim() || "" : "",
+      collectionNames: values.kind === 0 ? values.collectionNames : [],
       mcpToolId: values.kind === 2 ? values.mcpToolId?.trim() || "" : "",
+      // 非 MCP 节点回落 0，与后端 normalizeRequireConfirm 同口径，避免改类型后残留
+      requireConfirm: values.kind === 2 && values.requireConfirm ? 1 : 0,
       kind: values.kind,
       topK: values.topK ?? undefined,
       sortOrder: values.sortOrder ?? 0,
       enabled: values.enabled ? 1 : 0,
-      promptSnippet: values.promptSnippet?.trim() || "",
-      promptTemplate: values.promptTemplate?.trim() || "",
-      paramPromptTemplate: values.kind === 2 ? values.paramPromptTemplate?.trim() || "" : ""
+      promptSnippet: values.kind === 2 ? undefined : values.promptSnippet?.trim() || "",
+      promptTemplate: values.kind === 2 ? undefined : values.promptTemplate?.trim() || ""
     };
 
     try {
@@ -459,13 +486,22 @@ export function IntentEditPage() {
               {kind === 0 ? (
                 <FormField
                   control={form.control}
-                  name="collectionName"
+                  name="collectionNames"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Collection 名称</FormLabel>
+                      <FormLabel>
+                        知识库{form.watch("level") === 2 ? "（至少选择一个）" : "（可选）"}
+                      </FormLabel>
                       <FormControl>
-                        <Input placeholder="向量数据库 Collection 名称" {...field} />
+                        <KnowledgeBaseMultiSelect
+                          knowledgeBases={knowledgeBases}
+                          value={field.value}
+                          onChange={field.onChange}
+                        />
                       </FormControl>
+                      <FormDescription>
+                        可选择多个知识库，检索时统一排序，节点 TopK 为总返回上限
+                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -482,6 +518,30 @@ export function IntentEditPage() {
                       <FormControl>
                         <Input placeholder="例如：sales_query" {...field} />
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              ) : null}
+
+              {kind === 2 ? (
+                <FormField
+                  control={form.control}
+                  name="requireConfirm"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center gap-2">
+                        <FormControl>
+                          <Checkbox
+                            checked={field.value}
+                            onCheckedChange={(value) => field.onChange(value === true)}
+                          />
+                        </FormControl>
+                        <FormLabel className="!m-0">执行前需要用户确认</FormLabel>
+                      </div>
+                      <FormDescription>
+                        勾上之后，助手调用这个工具前会先停下来，把工具名和参数交给用户点头。请假、退款一类会真正改数据的工具建议勾上
+                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -521,20 +581,21 @@ export function IntentEditPage() {
                 </div>
               </details>
 
-              <details className="rounded-lg border px-4 py-3">
-                <summary className="cursor-pointer text-sm font-medium text-foreground">Prompt 配置</summary>
-                <div className="mt-3 space-y-4">
-                  <FormField
-                    control={form.control}
-                    name="promptSnippet"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>短规则片段（可选）</FormLabel>
-                        <FormControl>
-                          <Textarea rows={3} placeholder="多意图场景下的规则补充" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
+              {kind !== 2 && (
+                <details className="rounded-lg border px-4 py-3">
+                  <summary className="cursor-pointer text-sm font-medium text-foreground">Prompt 配置</summary>
+                  <div className="mt-3 space-y-4">
+                    <FormField
+                      control={form.control}
+                      name="promptSnippet"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>短规则片段（可选）</FormLabel>
+                          <FormControl>
+                            <Textarea rows={3} placeholder="多意图场景下的规则补充" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
                     )}
                   />
 
@@ -551,24 +612,9 @@ export function IntentEditPage() {
                       </FormItem>
                     )}
                   />
-
-                  {kind === 2 ? (
-                    <FormField
-                      control={form.control}
-                      name="paramPromptTemplate"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>参数提取提示词模板（MCP专属）</FormLabel>
-                          <FormControl>
-                            <Textarea rows={4} placeholder="用于提取MCP工具参数" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  ) : null}
                 </div>
               </details>
+              )}
 
               <details className="rounded-lg border px-4 py-3">
                 <summary className="cursor-pointer text-sm font-medium text-foreground">高级设置</summary>

@@ -2,9 +2,8 @@ import type { RagTraceNode } from "@/services/ragTraceService";
 
 export const PAGE_SIZE = 10;
 
-export type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
-
-export type TraceStatus = "" | "success" | "failed" | "running";
+/** 过滤条件直接按库里的原始值做等值查询，取值须与后端写入的常量保持一致 */
+export type TraceStatus = "" | "SUCCESS" | "ERROR" | "RUNNING";
 
 export type TraceFilters = {
   traceId: string;
@@ -30,29 +29,30 @@ export const DEFAULT_FILTERS: TraceFilters = {
 
 export const STATUS_OPTIONS: { value: TraceStatus; label: string }[] = [
   { value: "", label: "全部状态" },
-  { value: "running", label: "运行中" },
-  { value: "success", label: "成功" },
-  { value: "failed", label: "失败" }
+  { value: "RUNNING", label: "运行中" },
+  { value: "SUCCESS", label: "成功" },
+  { value: "ERROR", label: "失败" }
 ];
 
-export const normalizeStatus = (status?: string | null): string => (status || "").trim().toLowerCase();
+// 后端写入的链路状态是 RUNNING / SUCCESS / ERROR / CANCELLED，这里统一归一成前端语义，各处只比归一后的值
+const STATUS_ALIAS: Record<string, string> = {
+  error: "failed",
+  canceled: "cancelled"
+};
+
+export const normalizeStatus = (status?: string | null): string => {
+  const raw = (status || "").trim().toLowerCase();
+  return STATUS_ALIAS[raw] ?? raw;
+};
 
 export const statusLabel = (status?: string | null): string => {
   const normalized = normalizeStatus(status);
-  if (!normalized) return "UNKNOWN";
-  if (normalized === "success") return "SUCCESS";
-  if (normalized === "failed") return "FAILED";
-  if (normalized === "running") return "RUNNING";
-  if (normalized === "timeout") return "TIMEOUT";
+  if (!normalized) return "未知";
+  if (normalized === "success") return "成功";
+  if (normalized === "failed") return "失败";
+  if (normalized === "running") return "运行中";
+  if (normalized === "cancelled") return "已取消";
   return normalized.toUpperCase();
-};
-
-export const statusBadgeVariant = (status?: string | null): BadgeVariant => {
-  const normalized = normalizeStatus(status);
-  if (normalized === "failed" || normalized === "timeout") return "destructive";
-  if (normalized === "running") return "secondary";
-  if (normalized === "success") return "default";
-  return "outline";
 };
 
 export const toTimestamp = (value?: string | number | null): number | null => {

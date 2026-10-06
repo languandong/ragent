@@ -23,8 +23,11 @@ export interface SampleQuestionPayload {
   question?: string | null;
 }
 
-export async function listSampleQuestions(): Promise<SampleQuestion[]> {
-  return api.get<SampleQuestion[], SampleQuestion[]>("/rag/sample-questions");
+/** 随机取若干条示例问题，两套前端的欢迎页共用（后端 2026-08-13 由 rag 迁到 system） */
+export async function listSampleQuestions(limit = 3): Promise<SampleQuestion[]> {
+  return api.get<SampleQuestion[], SampleQuestion[]>("/sample-questions/random", {
+    params: { limit }
+  });
 }
 
 export async function getSampleQuestionsPage(

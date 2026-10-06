@@ -73,24 +73,58 @@ public class AIModelProperties {
 
     /**
      * 模型组配置类
-     * 包含默认模型、深度思考模型以及候选模型列表
+     * 包含默认模型与候选模型列表
      */
     @Data
     public static class ModelGroup {
         /**
-         * 默认使用的模型标识
+         * 默认使用的模型标识（embedding/rerank/vlm 使用；chat 已改用 tier）
          */
         private String defaultModel;
 
         /**
-         * 深度思考模型标识
-         */
-        private String deepThinkingModel;
-
-        /**
          * 候选模型列表
+         * <p>
+         * chat 组下退化为"物理模型注册表"：只登记 id→provider/model，档位排序由 tiers 决定
          */
         private List<ModelCandidate> candidates = new ArrayList<>();
+
+        /**
+         * 默认档位名（仅 chat 使用）
+         * 未显式指定 Tier 覆盖时的默认档位（兜底档）
+         */
+        private String defaultTier;
+
+        /**
+         * 深度思考档位名（仅 chat 使用）
+         * 用户开启深度思考时的目标档位
+         */
+        private String deepThinkingTier;
+
+        /**
+         * 档位配置映射（仅 chat 使用）
+         * key: 档位名（如 fast/standard/deep），value: 该档位的候选与超时
+         */
+        private Map<String, TierConfig> tiers = new HashMap<>();
+    }
+
+    /**
+     * 档位配置类
+     * 定义单个档位的有序候选与超时预算
+     */
+    @Data
+    public static class TierConfig {
+
+        /**
+         * 有序候选模型 id 列表
+         * 引用 candidates 注册表中的 id，顺序即候选顺序（局部，不依赖全局 priority）
+         */
+        private List<String> candidates = new ArrayList<>();
+
+        /**
+         * 该档位的调用超时预算（毫秒），null 表示不额外限制
+         */
+        private Long timeoutMs;
     }
 
     /**

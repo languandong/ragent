@@ -17,10 +17,8 @@
 
 package com.nageoffer.ai.ragent.infra.chat;
 
-import com.nageoffer.ai.ragent.framework.convention.ChatMessage;
 import com.nageoffer.ai.ragent.framework.convention.ChatRequest;
-
-import java.util.List;
+import com.nageoffer.ai.ragent.infra.enums.Tier;
 
 /**
  * 通用大语言模型（LLM）访问接口
@@ -41,44 +39,18 @@ import java.util.List;
  * - 流式 token 输出（配合 StreamCallback）
  * <p>
  * 注意事项：
- * - 默认方法 chat(String) / streamChat(String) 主要用于简单问答
- * - 复杂场景（带上下文、多轮对话、控制生成参数）需要使用 ChatRequest
+ * - 档位默认 standard；调用点想要更快/更强模型时传 Tier 覆盖，深度思考（thinking=true）走 deep-thinking-tier
+ * - 复杂场景（带上下文、多轮对话、控制生成参数）通过 ChatRequest 表达
  * - 流式模式下需正确处理 cancel()，并确保资源释放
  */
 public interface LLMService {
 
     /**
-     * 同步调用（简化模式）
+     * 同步调用（默认档位）
      * <p>
      * 说明：
-     * - 仅传入 prompt，不包含上下文、系统提示词、生成参数等
-     * - 底层会自动构造 ChatRequest 并直接执行
-     * - 返回完整回答字符串
-     * <p>
-     * 常用场景：
-     * - 单轮提问
-     * - 偶发性工具调用
-     *
-     * @param prompt 用户问题/提示词
-     * @return 模型返回的完整回答
-     */
-    default String chat(String prompt) {
-        ChatRequest req = ChatRequest.builder()
-                .messages(List.of(ChatMessage.user(prompt)))
-                .build();
-        return chat(req);
-    }
-
-    /**
-     * 同步调用（高级模式）
-     * <p>
-     * 说明：
-     * - 支持系统提示词（system），消息列表（messages），
-     * RAG 上下文（contextChunks），生成参数（temperature 等）
-     * - 适用于需要精细控制的大模型调用
-     * <p>
-     * 返回：
-     * - 一次性完整回答，无流式回调
+     * - 档位默认 standard（未传 Tier 覆盖）；深度思考由 request.thinking 表达，命中时走 deep-thinking-tier
+     * - 支持系统提示词、消息列表、生成参数等精细控制
      *
      * @param request ChatRequest 包含完整配置的请求对象
      * @return 模型返回的完整回答
@@ -86,48 +58,38 @@ public interface LLMService {
     String chat(ChatRequest request);
 
     /**
-     * 同步调用（指定模型）
+     * 同步调用（指定档位覆盖）
      * <p>
      * 说明：
-     * - modelId 为空时等同于 chat(request)，走默认路由
-     * - modelId 不为空时只使用指定模型，仍走路由层的健康检查与 fallback
+     * - tier 显式指定档位（想要更快/更强模型时由调用点传入），覆盖默认 standard
+     * - 深度思考仍优先：request.thinking=true 时走 deep-thinking-tier
      *
      * @param request ChatRequest 完整配置的请求
-     * @param modelId 指定的模型ID，为空时走默认路由
+     * @param tier    目标档位
      * @return 模型返回的完整回答
      */
-    default String chat(ChatRequest request, String modelId) {
-        return chat(request);
-    }
+    String chat(ChatRequest request, Tier tier);
 
     /**
-     * 流式调用（简化模式）
+     * 同步调用（指定档位覆盖 + 指定优先模型）
      * <p>
-     * 说明：
-     * - 仅传入 prompt，不指定上下文或生成参数
-     * - 模型回答将通过 StreamCallback.onContent() 分段推送
-     * - 返回取消句柄，可随时通过 handle.cancel() 取消生成
+     * 说明（preferred 语义）：
+     * - 优先使用 preferredModelId 指定的模型，失败后回退到 tier 档位的其余候选
+     * - preferredModelId 为空时等同于 chat(request, tier)
      *
-     * @param prompt   用户输入内容
-     * @param callback 流式回调处理器
-     * @return StreamCancellationHandle 可用于取消推理
+     * @param request          ChatRequest 完整配置的请求
+     * @param tier             回退档位
+     * @param preferredModelId 优先模型 id，为空时走档位候选
+     * @return 模型返回的完整回答
      */
-    default StreamCancellationHandle streamChat(String prompt, StreamCallback callback) {
-        ChatRequest req = ChatRequest.builder()
-                .messages(List.of(ChatMessage.user(prompt)))
-                .build();
-        return streamChat(req, callback);
-    }
+    String chat(ChatRequest request, Tier tier, String preferredModelId);
 
     /**
-     * 流式调用（高级模式）
+     * 流式调用（默认档位）
      * <p>
      * 说明：
-     * - 适用于需要上下文、多轮对话、参数控制的流式推理
-     * - 模型输出可能按 token 或按句段推送
-     * - 所有增量内容通过 callback.onContent() 回调
-     * - 调用结束后必须调用 callback.onComplete()
-     * - 出现异常时调用 callback.onError()
+     * - 档位默认 standard；深度思考由 request.thinking 表达，命中时走 deep-thinking-tier
+     * - 所有增量内容通过 callback.onContent() 回调，结束调用 onComplete()，异常调用 onError()
      *
      * @param request  ChatRequest 完整配置的请求
      * @param callback 流式回调接口

@@ -49,6 +49,11 @@ public enum ModelProvider {
     AI_HUB_MIX("aihubmix"),
 
     /**
+     * DeepSeek 官方开放平台
+     */
+    DEEP_SEEK("deepseek"),
+
+    /**
      * 空实现，用于测试或占位
      */
     NOOP("noop");

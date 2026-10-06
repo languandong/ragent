@@ -42,6 +42,7 @@ import {
   getIntentTree,
   type IntentNodeTree
 } from "@/services/intentTreeService";
+import { getKnowledgeBases } from "@/services/knowledgeService";
 import { getErrorMessage } from "@/utils/error";
 
 const ALL_VALUE = "__ALL__";
@@ -75,6 +76,7 @@ type FlatIntentNode = {
   description?: string | null;
   examples?: string | null;
   collectionName?: string | null;
+  collectionNames?: string[] | null;
   mcpToolId?: string | null;
   topK?: number | null;
   enabled: number;
@@ -123,6 +125,7 @@ const flattenIntentTree = (
       description: node.description,
       examples: node.examples,
       collectionName: node.collectionName,
+      collectionNames: node.collectionNames,
       mcpToolId: node.mcpToolId,
       topK: node.topK,
       enabled: node.enabled === 0 ? 0 : 1,
@@ -173,6 +176,7 @@ export function IntentListPage() {
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [batchSubmitting, setBatchSubmitting] = useState<null | "enable" | "disable" | "delete">(null);
+  const [knowledgeBaseNameMap, setKnowledgeBaseNameMap] = useState<Map<string, string>>(new Map());
 
   const loadIntentTree = async () => {
     try {
@@ -189,6 +193,9 @@ export function IntentListPage() {
 
   useEffect(() => {
     loadIntentTree();
+    getKnowledgeBases()
+      .then((data) => setKnowledgeBaseNameMap(new Map(data.map((kb) => [kb.collectionName, kb.name]))))
+      .catch((error) => console.error(error));
   }, []);
 
   const rows = useMemo(() => flattenIntentTree(tree), [tree]);
@@ -337,9 +344,14 @@ export function IntentListPage() {
     }
   };
 
+  const resolveCollections = (row: FlatIntentNode) =>
+    row.collectionNames?.length ? row.collectionNames : row.collectionName ? [row.collectionName] : [];
+
   const resolveResourceText = (row: FlatIntentNode) => {
     if (row.kind === 0) {
-      return row.collectionName || "-";
+      return resolveCollections(row)
+        .map((collectionName) => knowledgeBaseNameMap.get(collectionName) || collectionName)
+        .join("、") || "-";
     }
     if (row.kind === 2) {
       return row.mcpToolId || "-";
@@ -633,13 +645,41 @@ export function IntentListPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="space-y-0.5">
-                        <div
-                          className="truncate text-sm text-slate-700"
-                          title={resolveResourceText(row)}
-                        >
-                          {resolveResourceText(row)}
-                        </div>
+                      <div className="space-y-1">
+                        {row.kind === 0 ? (
+                          resolveCollections(row).length === 0 ? (
+                            <span className="text-sm text-slate-400">-</span>
+                          ) : (
+                            <div
+                              className="flex flex-wrap items-center gap-1"
+                              title={resolveResourceText(row)}
+                            >
+                              {resolveCollections(row)
+                                .slice(0, 2)
+                                .map((collectionName) => (
+                                  <Badge
+                                    key={collectionName}
+                                    variant="secondary"
+                                    className="max-w-[9rem] truncate font-normal"
+                                  >
+                                    {knowledgeBaseNameMap.get(collectionName) || collectionName}
+                                  </Badge>
+                                ))}
+                              {resolveCollections(row).length > 2 ? (
+                                <Badge variant="outline" className="font-normal text-slate-500">
+                                  +{resolveCollections(row).length - 2}
+                                </Badge>
+                              ) : null}
+                            </div>
+                          )
+                        ) : (
+                          <div
+                            className="truncate text-sm text-slate-700"
+                            title={resolveResourceText(row)}
+                          >
+                            {resolveResourceText(row)}
+                          </div>
+                        )}
                         <p className="text-xs text-slate-400">TopK: {row.topK ?? "全局默认"}</p>
                       </div>
                     </TableCell>

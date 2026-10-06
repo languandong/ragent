@@ -18,12 +18,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { getRagTraceDetail, type RagTraceDetail } from "@/services/ragTraceService";
 import { getErrorMessage } from "@/utils/error";
+import { TraceStatusChip } from "@/pages/admin/traces/components/TraceStatusChip";
 import {
   clamp,
   formatDateTime,
@@ -32,8 +32,6 @@ import {
   normalizeStatus,
   prettifyNodeName,
   resolveNodeDuration,
-  statusBadgeVariant,
-  statusLabel,
   toTimestamp,
   type TimelineNode
 } from "@/pages/admin/traces/traceUtils";
@@ -263,9 +261,7 @@ function NodeDetailCard({
               <CardTitle className="text-sm font-medium text-slate-700 truncate" title={displayName}>
                 {displayName}
               </CardTitle>
-              <Badge variant={statusBadgeVariant(node.status)} className="text-xs">
-                {statusLabel(node.status)}
-              </Badge>
+              <TraceStatusChip status={node.status} />
               <span className={cn(
                   "text-xs px-2 py-0.5 rounded font-medium",
                   nodeTypeChipClass(node.nodeType)
@@ -388,8 +384,9 @@ export function RagTraceDetailPage() {
       console.error(error);
       setDetail(null);
     } finally {
-      if (detailRequestRef.current !== requestId) return;
-      setDetailLoading(false);
+      if (detailRequestRef.current === requestId) {
+        setDetailLoading(false);
+      }
     }
   };
 
@@ -407,7 +404,7 @@ export function RagTraceDetailPage() {
 
   const timeline = useMemo(() => {
     const nodes = detail?.nodes || [];
-    if (!nodes.length && !selectedRun) return { totalWindowMs: 0, nodes: [] as any[] };
+    if (!nodes.length && !selectedRun) return { totalWindowMs: 0, nodes: [] as TimelineNode[] };
 
     const normalized = nodes.map((node) => {
       const startTs = toTimestamp(node.startTime);
@@ -609,9 +606,7 @@ export function RagTraceDetailPage() {
               <h1 className="text-lg font-semibold text-slate-900">
                 {selectedRun.traceName || "未命名链路"}
               </h1>
-              <Badge variant={statusBadgeVariant(selectedRun.status)} className="text-xs">
-                {statusLabel(selectedRun.status)}
-              </Badge>
+              <TraceStatusChip status={selectedRun.status} />
             </div>
           </div>
 
